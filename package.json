@@ -1,0 +1,91 @@
+{
+  "name": "deliver-desk",
+  "version": "0.2.0",
+  "private": true,
+  "description": "BOSS 直聘桌面求职工作台：职位筛选、沟通与本地历史",
+  "author": "DeliverDesk",
+  "license": "UNLICENSED",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "start": "npm run build:ui && electron .",
+    "build:ui": "vite build",
+    "build:backend": "uv run python scripts/build_backend.py",
+    "pack:mac": "npm run build:ui && npm run build:backend && electron-builder --mac --arm64",
+    "pack:win": "npm run build:ui && npm run build:backend && electron-builder --win --x64",
+    "test:desktop": "electron scripts/desktop-smoke.cjs",
+    "lint": "uv run ruff check . && uv run ruff format --check . && prettier --check .",
+    "format": "uv run ruff format . && prettier --write .",
+    "test:python": "uv run pytest -q",
+    "docs:screenshot": "npm run build:ui && electron scripts/docs-screenshot.cjs",
+    "release:prepare": "uv run python scripts/prepare_release.py"
+  },
+  "dependencies": {
+    "lucide-react": "^0.577.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
+    "prettier": "^3.9.6",
+    "vite": "8.2.2"
+  },
+  "build": {
+    "appId": "com.deliverdesk.app",
+    "productName": "投递工作台",
+    "directories": {
+      "output": "release",
+      "buildResources": "desktop/assets"
+    },
+    "files": [
+      "desktop/*.cjs",
+      "ui-dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "afterPack": "desktop/after-pack.cjs",
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "artifactName": "DeliverDesk-${version}-${os}-${arch}.${ext}"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/likeyeee/deliver-desk.git"
+  },
+  "homepage": "https://github.com/likeyeee/deliver-desk",
+  "bugs": {
+    "url": "https://github.com/likeyeee/deliver-desk/issues"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

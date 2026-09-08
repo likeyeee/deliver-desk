@@ -1,0 +1,48 @@
+# 先运行 boss login，再运行 boss preview。真正发送使用 boss run --send。
+state_dir: .boss-cli
+browser:
+  channel: chrome
+  cdp_url: null
+  headless: false
+  timeout_seconds: 20
+  login_timeout_seconds: 300
+search:
+  keywords:
+    - AI应用
+    - AI产品经理
+    - 大模型
+  city: 全国
+  filters: {}
+  max_jobs: 30
+  max_scrolls: 8
+match:
+  title_any:
+    - AI
+    - 人工智能
+    - 大模型
+    - AIGC
+    - 智能体
+  exclude: []
+  exclude_companies: []
+  description_all: []
+  salary_min: null
+  salary_max: null
+  unknown_salary: skip
+message:
+  mode: custom
+  template: 您好，我对贵公司的{title}岗位很感兴趣，希望进一步了解岗位要求和团队情况，方便交流吗？
+run:
+  max_sends: 5
+  daily_limit: 20
+  action_delay:
+    - 1.5
+    - 3.5
+  job_delay:
+    - 15.0
+    - 30.0
+  cooldown_every: 5
+  cooldown_seconds:
+    - 60.0
+    - 120.0
+  max_errors: 3
+selectors: {}

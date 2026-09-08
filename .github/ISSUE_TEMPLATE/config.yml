@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用说明
+    url: https://github.com/likeyeee/deliver-desk/blob/main/docs/desktop-guide.md
+    about: 安装、登录、预览、投递与常见问题
+  - name: 私密漏洞报告
+    url: https://github.com/likeyeee/deliver-desk/security/advisories/new
+    about: 不要在公开 Issue 中提交账号或漏洞利用细节

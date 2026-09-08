@@ -1,0 +1,18 @@
+name: 功能建议
+description: 提出具体使用场景和改进
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你要解决什么问题？
+      description: 说明使用场景和现在遇到的困难。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的操作方式
+      description: 描述输入、操作和结果；可附示意图。
+    validations:
+      required: true

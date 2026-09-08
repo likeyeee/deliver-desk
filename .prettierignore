@@ -1,0 +1,12 @@
+.boss-cli/
+.venv/
+node_modules/
+build/
+dist/
+release/
+ui-dist/
+artifacts/
+uv.lock
+package-lock.json
+/boss.yaml
+docs/assets/
