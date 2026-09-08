@@ -26,13 +26,16 @@ export default function BrowserPanel({
   const tabs = browser.tabs || [];
   const current = tabs.find((tab) => tab.id === browser.activeId);
   const run = state.run;
+  const hasProgress = run?.mode === "send" && run.target > 0;
   const event = state.events
     .filter((item) => item.run_id === run?.run_id)
     .at(-1);
   const phase =
-    event?.kind === "login"
-      ? "正在检查登录，出现二维码时请扫码。"
-      : event?.message.split("\n")[0];
+    event?.kind === "start"
+      ? "正在准备浏览器…"
+      : event?.kind === "login"
+        ? "正在检查登录，出现二维码时请扫码。"
+        : event?.message.split("\n")[0];
   const navigate = (actionName) =>
     action(() => window.desk.browserNavigate({ action: actionName }));
   useLayoutEffect(() => {
@@ -69,20 +72,26 @@ export default function BrowserPanel({
             {state.active
               ? run?.status === "paused"
                 ? "任务已暂停"
-                : "正在执行任务"
+                : {
+                    send: "正在投递",
+                    preview: "正在预览职位",
+                    login: "正在检查登录",
+                    verify: "正在核对送达",
+                    diagnose: "正在检查网页",
+                  }[run?.mode] || "准备中"
               : "BOSS 浏览器"}
           </strong>
           <span>
-            {run?.mode === "send"
-              ? `已尝试 ${run.attempts || 0} / ${run.target || state.config.run.max_sends} 次 · 确认送达 ${run.sent} 次 · 跳过 ${run.skipped} 个`
+            {hasProgress
+              ? `已尝试 ${run.attempts || 0} / ${run.target} 次 · 确认送达 ${run.sent} 次 · 跳过 ${run.skipped} 个`
               : browser.loggedIn
                 ? "登录已保存，可回到工作台设置投递"
                 : "使用 BOSS 直聘 App 扫码登录，登录后自动继续"}
           </span>
-          {run?.mode === "send" && (
+          {hasProgress && (
             <progress
               aria-label="本次投递进度"
-              max={run.target || state.config.run.max_sends}
+              max={run.target}
               value={run.attempts || 0}
             />
           )}

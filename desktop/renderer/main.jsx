@@ -157,6 +157,7 @@ function App() {
   }, []);
   async function act(fn, success) {
     setBusy(true);
+    setNotice(null);
     try {
       const result = await fn();
       if (success && result !== null) setNotice({ text: success });

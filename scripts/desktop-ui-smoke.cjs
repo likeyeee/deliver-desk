@@ -40,6 +40,11 @@ async function snapshot() {
 }
 async function run() {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "deliverdesk-ui-"));
+  execFileSync(python, [
+    "-c",
+    "import sys; from pathlib import Path; from boss_cli.storage import Store; s=Store(Path(sys.argv[1])/'state'); s.create_run('legacy','send'); s.update_run('legacy',status='completed',sent=1); s.db.execute('ALTER TABLE runs DROP COLUMN target'); s.db.execute('ALTER TABLE runs DROP COLUMN attempts'); s.close()",
+    temp,
+  ]);
   desktop = await _electron.launch({
     executablePath: require("electron"),
     args: [root],
@@ -98,6 +103,11 @@ async function run() {
   }, fixtures);
   await page.getByRole("button", { name: "扫码登录", exact: true }).click();
   await page.getByRole("region", { name: "BOSS 内置浏览器" }).waitFor();
+  assert.equal(
+    await page.getByRole("progressbar", { name: "本次投递进度" }).count(),
+    0,
+    "Legacy runs have no saved target and must not use the new configuration's target",
+  );
   await until(async () =>
     (await snapshot()).browser.tabs?.some((tab) =>
       tab.url.includes("/web/user/"),
