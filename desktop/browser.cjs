@@ -93,7 +93,12 @@ class BrowserManager {
     const view = this.get(id);
     this.lastId = id;
     this.layout();
-    if (focus && this.visible) view.webContents.focus();
+    // Native input needs the host and target renderer focused even while the
+    // workspace covers that renderer. Visibility alone does not establish focus.
+    if (focus) {
+      this.host.focus();
+      view.webContents.focus();
+    }
     return id;
   }
   preferences() {

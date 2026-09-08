@@ -169,8 +169,9 @@ app
     assert.equal(selectedView.getBounds().x, 220);
     browser.setViewport({ visible: false });
     assert.equal(host.contentView.children.at(-1), browser.shellView);
+    shellView.webContents.focus();
     await selectedView.webContents.executeJavaScript(
-      "window.nativeHiddenClick = false; const probe = document.createElement('button'); probe.id='native-probe'; probe.style='position:fixed;left:0;top:0;width:60px;height:60px;z-index:9999'; probe.onclick=()=>{window.nativeHiddenClick=true};document.body.append(probe)",
+      "window.nativeHiddenClick = 0; const probe = document.createElement('button'); probe.id='native-probe'; probe.style='position:fixed;left:0;top:0;width:60px;height:60px;z-index:9999'; probe.onclick=(event)=>{if(event.isTrusted)window.nativeHiddenClick++};document.body.append(probe)",
     );
     await browser.command("click", { page: browser.lastId, x: 25, y: 25 });
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -178,7 +179,7 @@ app
       await selectedView.webContents.executeJavaScript(
         "window.nativeHiddenClick",
       ),
-      true,
+      1,
       "Native operations continue when the user switches to logs or the workspace",
     );
     await selectedView.webContents.executeJavaScript(
@@ -266,6 +267,7 @@ app
     await backend.request("saveConfig", { config });
     const batchStart = Date.now();
     browser.setViewport({ visible: false });
+    shellView.webContents.focus();
     await backend.request("start", { mode: "send" });
     state = await until(async () => {
       const s = await backend.request("snapshot");
