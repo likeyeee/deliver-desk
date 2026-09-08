@@ -87,12 +87,15 @@ class BrowserManager {
       this.visible && this.views.has(this.lastId)
         ? this.views.get(this.lastId)
         : this.shellView;
-    this.host.contentView.addChildView(top);
+    if (this.host.contentView.children.at(-1) !== top)
+      this.host.contentView.addChildView(top);
   }
   activate(id, focus = false) {
     const view = this.get(id);
-    this.lastId = id;
-    this.layout();
+    if (this.lastId !== id) {
+      this.lastId = id;
+      this.layout();
+    }
     // Native input needs the host and target renderer focused even while the
     // workspace covers that renderer. Visibility alone does not establish focus.
     if (focus) {
@@ -176,9 +179,6 @@ class BrowserManager {
         this.lastId = [...this.views.keys()].at(-1) || null;
       this.layout();
       this.emit({ kind: "browserEvent", event: "closed", page: id });
-    });
-    wc.on("focus", () => {
-      this.lastId = id;
     });
     if (parent)
       this.emit({
@@ -290,7 +290,7 @@ class BrowserManager {
         return true;
       }
       case "show":
-        this.activate(params.page);
+        this.activate(params.page, true);
         return true;
       case "close":
         wc.close({ waitForBeforeUnload: false });
