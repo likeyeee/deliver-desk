@@ -60,6 +60,6 @@ npx electron-builder --config desktop/windows-cross.cjs --win --x64 --publish ne
 
 修正包括等待城市和结果加载完成、避免页面更新期间的重复定位、从简易沟通弹窗转到完整会话，以及识别新版消息气泡。完整聊天页通过网站的“查看职位”核对实际职位 ID，不能仅凭公司名或联系人列表顺序发送。当前记录保留了首次回执识别失败和后续只读核验的过程。
 
-本地已通过 84 项 Python 测试，另有 Electron 与打包 Python 服务的隔离闭环验证。跨平台检查结果见 [CI](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml)。macOS 应用已实际启动；Windows 包包含 Windows x64 运行环境，但尚未在 Windows 机器执行启动与安装验收。一次实站成功不能保证网站未来布局或验证机制不会变化。
+自动检查覆盖 Python 核心、浏览器和进程测试，以及 Electron 与打包 Python 服务的隔离流程。macOS / Windows 的原生服务均已在 GitHub Actions 执行；结果见 [CI](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml) 和 [原生构建](https://github.com/likeyeee/deliver-desk/actions/workflows/desktop-build.yml)。macOS 安装版已实际启动并恢复登录；Windows 安装向导和真实账号登录仍需实机验收。网站后续布局变化可能需要继续适配。
 
 参考依据：[Electron WebContents](https://www.electronjs.org/docs/latest/api/web-contents)、[Electron 安全建议](https://www.electronjs.org/docs/latest/tutorial/security)、[Python Windows 嵌入式发行包](https://docs.python.org/3/using/windows.html#the-embeddable-package)、[electron-builder 跨平台构建](https://www.electron.build/docs/features/multi-platform-build/)。原有 BOSS 页面适配研究见 [GitHub 项目研究](research/github-reference.md)。
