@@ -112,6 +112,7 @@ def prepare():
         raise SystemExit("Expected both macOS and Windows native installers and ZIPs.")
     subprocess.run([sys.executable, "scripts/prepare_release.py"], cwd=ROOT, check=True)
     shutil.copyfile(PROVENANCE, RELEASE / "build-provenance.json")
+    shutil.copyfile(ROOT / "docs/desktop-guide.md", RELEASE / "USER_GUIDE.md")
 
 
 def publish():
@@ -166,7 +167,7 @@ def publish():
         RELEASE / "SHA256SUMS.txt",
         RELEASE / "package-audit.json",
         RELEASE / "build-provenance.json",
-        RELEASE / "使用说明.md",
+        RELEASE / "USER_GUIDE.md",
     ]
     subprocess.run(
         ["gh", "release", "upload", tag, *map(str, assets), "--clobber"], cwd=ROOT, check=True
