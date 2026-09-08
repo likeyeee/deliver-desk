@@ -39,7 +39,8 @@ app
     let fixtureJob = "abc123";
     browser = new BrowserManager(temp, (data) => backend?.send(data), {
       partition: "desktop-smoke",
-      visible: false,
+      // X11 needs a mapped window to receive native mouse events under Xvfb.
+      visible: process.platform === "linux",
     });
     await browser.session.protocol.handle("https", (request) => {
       requests.push(request.url);
