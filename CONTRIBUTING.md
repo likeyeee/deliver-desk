@@ -23,7 +23,7 @@ npm run build:ui
 npm run test:desktop
 ```
 
-Python 浏览器测试需要 Chrome。桌面集成测试使用临时目录和合成网页，拦截全部网站请求，不会联系真实招聘方。Linux 上用 `xvfb-run -a npm run test:desktop`。
+Python 浏览器测试需要 Chrome，CI 覆盖 Linux、macOS 和 Windows。桌面集成测试在发行目标 macOS / Windows 上执行，使用临时目录和合成网页，拦截全部网站请求，不会联系真实招聘方。
 
 修改打包、IPC 或任务服务时，还需验证打包后的核心：
 

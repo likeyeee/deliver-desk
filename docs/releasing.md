@@ -33,9 +33,9 @@ npx electron-builder --config desktop/windows-cross.cjs --win --x64 --publish ne
 
 ## GitHub Actions
 
-- **CI**：每次 push / pull request 执行格式检查、Python 测试和 Electron 隔离集成测试。
+- **CI**：每次 push / pull request 执行格式检查、三平台 Python 测试，以及 macOS / Windows Electron 隔离集成测试。
 - **Desktop installers**：手动运行或推送 `v*` 标签，在 macOS / Windows 原生构建，验证打包后的 Python 服务，上传安装产物和校验值。
-- 工作流只构建和保存 Actions 产物；通过验收的文件再上传到 GitHub Releases。
+- **Publish release**：填写已成功的原生构建运行 ID，检查当前 CI 与应用源码一致性，审计产物后发布测试版本。安装包在 GitHub 内直接转入 Releases。
 
 ## 发布清单
 
