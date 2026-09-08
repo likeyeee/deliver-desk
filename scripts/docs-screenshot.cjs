@@ -51,7 +51,7 @@ app
       events: [],
       attemptsToday: 0,
       directory: "示例数据",
-      version: "0.2.0",
+      version: require("../package.json").version,
       browser: { loggedIn: true },
       jobs: [
         {
@@ -107,6 +107,10 @@ app
       }, 50);
     });
   `);
+    const height = await window.webContents.executeJavaScript(
+      "document.documentElement.scrollHeight",
+    );
+    window.setContentSize(1360, height);
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const screenshot = await window.webContents.capturePage();
     const target = path.join(root, "docs/assets/workspace.png");

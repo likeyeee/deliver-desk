@@ -305,6 +305,10 @@ class BossAdapter:
         screenshot = self.session.directory / "login.png"
         with suppress(OSError):
             screenshot.unlink(missing_ok=True)
+        if urlsplit(self.page.url).hostname == "www.zhipin.com" and await self.logged_in(self.page):
+            await self.gate(self.page)
+            await self.page.bring_to_front()
+            return
         await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
         await self.page.bring_to_front()
         deadline = time.monotonic() + timeout
@@ -563,13 +567,17 @@ class BossAdapter:
 
     async def inspect_job(self, job: Job) -> Job:
         await self.control.checkpoint()
-        if self.detail and not self.detail.is_closed():
-            await self.detail.close()
-        self.detail = await self.session.context.new_page()
-        self.watch_page(self.detail)
-        self.session.owned_pages.append(self.detail)
+        # Reuse the detail renderer and close only the previous job's auxiliary tabs.
+        for page in self.detail_popups:
+            if not page.is_closed():
+                await page.close()
+        self.session.owned_pages[:] = [p for p in self.session.owned_pages if not p.is_closed()]
+        if not self.detail or self.detail.is_closed():
+            self.detail = await self.session.context.new_page()
+            self.watch_page(self.detail)
+            self.session.owned_pages.append(self.detail)
+            self.detail.on("popup", self.register_popup)
         self.detail_popups = []
-        self.detail.on("popup", self.register_popup)
         # Follow a link observed in the result card; use its temporary parameters only in memory.
         raw_url = self.live_urls.get(job.job_id, job.url)
         canonical_job_url(raw_url)

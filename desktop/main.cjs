@@ -1,6 +1,7 @@
 const {
   app,
-  BrowserWindow,
+  BaseWindow,
+  WebContentsView,
   ipcMain,
   dialog,
   shell,
@@ -14,7 +15,12 @@ const { Backend } = require("./backend.cjs");
 
 const root = path.resolve(__dirname, "..");
 if (!app.isPackaged)
-  app.setPath("userData", path.join(root, ".boss-cli", "desktop"));
+  app.setPath(
+    "userData",
+    process.env.DELIVERDESK_DEV_DATA_DIR
+      ? path.resolve(process.env.DELIVERDESK_DEV_DATA_DIR)
+      : path.join(root, ".boss-cli", "desktop"),
+  );
 const dataDir =
   process.env.DELIVERDESK_WORKSPACE === "1" && !app.isPackaged
     ? path.join(root, ".boss-cli")
@@ -22,6 +28,7 @@ const dataDir =
 const config = path.join(dataDir, "desktop.yaml");
 const uiURL = pathToFileURL(path.join(root, "ui-dist", "index.html")).href;
 let window,
+  uiView,
   backend,
   browser,
   quitting = false,
@@ -30,8 +37,8 @@ const serviceCommands = ["saveConfig", "start", "control", "resolve"];
 function assertSender(event) {
   if (
     !window ||
-    event.sender !== window.webContents ||
-    event.senderFrame !== window.webContents.mainFrame ||
+    event.sender !== uiView.webContents ||
+    event.senderFrame !== uiView.webContents.mainFrame ||
     event.senderFrame.url !== uiURL
   )
     throw Error("未经授权的窗口请求");
@@ -51,25 +58,34 @@ function cleanCSV(value) {
   );
 }
 async function createWindow() {
-  window = new BrowserWindow({
+  window = new BaseWindow({
     width: 1360,
     height: 940,
     minWidth: 1080,
     minHeight: 760,
     title: "投递工作台",
     backgroundColor: "#f4f6f8",
+  });
+  uiView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-navigate", (event, url) => {
+  window.contentView.addChildView(uiView);
+  browser.attach(window, uiView);
+  window.once("closed", () => {
+    if (!uiView.webContents.isDestroyed())
+      uiView.webContents.close({ waitForBeforeUnload: false });
+  });
+  uiView.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  uiView.webContents.on("will-navigate", (event, url) => {
     if (url !== uiURL) event.preventDefault();
   });
-  await window.loadURL(uiURL);
+  await uiView.webContents.loadURL(uiURL);
   window.on("close", (event) => {
     if (!quitting) {
       event.preventDefault();
@@ -111,6 +127,20 @@ else {
         version: app.getVersion(),
       }));
       handle("openBrowser", () => browser.showOrOpen());
+      handle("browserViewport", (params) => browser.setViewport(params));
+      handle("browserTab", async ({ id, close }) => {
+        if (close) {
+          if ((await backend.request("snapshot")).active)
+            throw Error("请先停止任务，再关闭网页");
+          return browser.command("close", { page: id });
+        }
+        return browser.activate(id);
+      });
+      handle("browserNavigate", async ({ action }) => {
+        if ((await backend.request("snapshot")).active)
+          throw Error("请先停止任务，再手动跳转或刷新网页");
+        return browser.navigate(action);
+      });
       handle("openJob", async ({ url }) => {
         if (
           !/^https:\/\/www\.zhipin\.com\/job_detail\/[A-Za-z0-9_~\-]+\.html$/.test(

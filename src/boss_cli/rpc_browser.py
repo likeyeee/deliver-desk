@@ -270,7 +270,9 @@ class RpcPage:
         )
 
     async def goto(self, url, wait_until="domcontentloaded"):
-        data = await self.manager.bridge.request("goto", page=self.id, url=url)
+        data = await self.manager.bridge.request(
+            "goto", page=self.id, url=url, timeout=self.timeout * 1000
+        )
         self.url = data["url"]
 
     async def wait_for_load_state(self, state="domcontentloaded"):

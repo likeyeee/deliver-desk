@@ -7,10 +7,14 @@ desktop/main.cjs        Electron 主进程：窗口、文件对话框、数据�
         │ JSON Lines / stdio
 src/boss_cli/           Python 核心：匹配、额度、任务状态、SQLite
         │ 浏览器 RPC
-desktop/browser.cjs     Electron 网站窗口：DOM、鼠标、导航
+desktop/browser.cjs     主窗口内的网站视图：DOM、鼠标、导航
 ```
 
 CLI 直接复用 Python 核心，通过 Playwright 提供浏览器操作。桌面版通过 `rpc_browser.py` 实现相同的页面接口，无需用户安装 Chrome。
+
+主窗口使用 `BaseWindow`，应用界面与每个网站页面分别使用 `WebContentsView`。界面通过受限 IPC 提交浏览器占位区域的尺寸；主进程裁剪到窗口范围内，并在窗口缩放时更新。网站弹出页通过 `createWindow` 留在同一窗口，保留原生 opener 和导航关系。
+
+切到日志、设置或打开应用弹窗时，应用视图位于网站视图上方；网站渲染器保持映射，后台鼠标操作仍可执行。每轮复用详情页，结束后保留当前会话供查看，下次任务清理已管理的辅助页。登录分区始终为 `persist:boss`，更新不迁移账号。
 
 ## 模块
 
@@ -41,3 +45,5 @@ CLI 直接复用 Python 核心，通过 Playwright 提供浏览器操作。桌�
 发行应用使用 Electron `userData` 下的 `state/`；开发版使用 `.boss-cli/desktop/state/`。浏览器登录目录由应用持有，不随配置导入改变。CLI 默认使用配置旁的 `.boss-cli/`。
 
 每个目录独立计数和去重，建议同一账号固定使用一个目录。SQLite 使用 WAL；失败诊断与截图只保存在本机。
+
+旧数据目录会补充任务的目标和尝试数字段，保留原有历史。目标写入本次任务记录，之后修改配置不会改写已完成任务的进度。

@@ -40,6 +40,32 @@ CHAT_HTML = """<!doctype html><html><body>
 </div></body></html>"""
 
 
+async def test_reuses_logged_in_page_without_login_navigation(web):
+    navigations = []
+    web.page.on("framenavigated", lambda frame: navigations.append(frame.url))
+    await web.login(1)
+    assert navigations == []
+    assert web.page.url == "https://www.zhipin.com/web/geek/jobs"
+
+
+async def test_reuses_detail_view_and_closes_previous_job_popups(web, job):
+    import copy
+
+    await web.inspect_job(job)
+    detail = web.detail
+    popup = await web.session.context.new_page()
+    web.detail_popups.append(popup)
+    web.session.owned_pages.append(popup)
+    second = copy.deepcopy(job)
+    second.job_id = "new123"
+    second.url = "https://www.zhipin.com/job_detail/new123.html"
+    await web.inspect_job(second)
+    assert web.detail is detail
+    assert web.detail.url == second.url
+    assert popup.is_closed()
+    assert len(web.session.owned_pages) == 2
+
+
 @pytest.fixture
 async def web(config, store):
     async with async_playwright() as pw:
@@ -299,6 +325,7 @@ async def test_decline_arrives_after_typing_only_our_draft_is_cleared(web, job):
 async def test_login_blank_redirect_invalidates_old_qr_image(web):
     image = web.session.directory / "login.png"
     image.write_bytes(b"obsolete QR fixture")
+    await web.page.locator('a[href*="/web/geek/recommend"]').evaluate("e => e.remove()")
 
     async def blank_login(route):
         await route.fulfill(

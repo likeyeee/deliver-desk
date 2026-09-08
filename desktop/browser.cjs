@@ -1,4 +1,4 @@
-const { BrowserWindow, session } = require("electron");
+const { WebContentsView, session } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -18,10 +18,14 @@ class BrowserManager {
   constructor(dataDir, emit, options = {}) {
     this.dataDir = dataDir;
     this.emit = emit;
-    this.windows = new Map();
+    this.views = new Map();
     this.nextId = 1;
     this.partition = options.partition || "persist:boss";
-    this.visible = options.visible !== false;
+    this.host = null;
+    this.visible = false;
+    this.insets = { left: 220, top: 220, right: 16, bottom: 16 };
+    this.errors = new Map();
+    this.taskPages = new Set();
     this.session = session.fromPartition(this.partition);
     this.session.setPermissionRequestHandler((_, __, callback) =>
       callback(false),
@@ -29,6 +33,68 @@ class BrowserManager {
     this.session.setPermissionCheckHandler(() => false);
     this.session.on("will-download", (event) => event.preventDefault());
     this.lastId = null;
+    if (options.host) this.attach(options.host, options.shellView);
+  }
+  attach(host, shellView) {
+    this.host = host;
+    this.shellView = shellView;
+    if (!this.shellView) throw Error("工作台内容视图尚未就绪");
+    host.on("resize", () => this.layout());
+    host.once("closed", () => this.destroy());
+    this.layout();
+  }
+  setViewport({ visible, bounds }) {
+    if (bounds) {
+      if (
+        !["x", "y", "width", "height"].every((key) =>
+          Number.isFinite(bounds[key]),
+        )
+      )
+        throw Error("无效的浏览器尺寸");
+      const [width, height] = this.host.getContentSize();
+      this.insets = {
+        left: Math.max(0, Math.round(bounds.x)),
+        top: Math.max(0, Math.round(bounds.y)),
+        right: Math.max(0, Math.round(width - bounds.x - bounds.width)),
+        bottom: Math.max(0, Math.round(height - bounds.y - bounds.height)),
+      };
+    }
+    this.visible = visible === true;
+    this.layout();
+    return true;
+  }
+  layout() {
+    if (!this.host || this.host.isDestroyed()) return;
+    const [width, height] = this.host.getContentSize();
+    this.shellView.setBounds({ x: 0, y: 0, width, height });
+    const x = Math.min(width, this.insets.left),
+      y = Math.min(height, this.insets.top);
+    const bounds = {
+      x,
+      y,
+      width: Math.max(0, width - x - this.insets.right),
+      height: Math.max(0, height - y - this.insets.bottom),
+    };
+    for (const [id, view] of this.views) {
+      view.setBounds(bounds);
+      // Keep the active native renderer mapped behind the app when the user reads
+      // logs. Unmapping it prevents native input from reaching newly opened pages.
+      view.setVisible(
+        id === this.lastId && bounds.width > 0 && bounds.height > 0,
+      );
+    }
+    const top =
+      this.visible && this.views.has(this.lastId)
+        ? this.views.get(this.lastId)
+        : this.shellView;
+    this.host.contentView.addChildView(top);
+  }
+  activate(id, focus = false) {
+    const view = this.get(id);
+    this.lastId = id;
+    this.layout();
+    if (focus && this.visible) view.webContents.focus();
+    return id;
   }
   preferences() {
     return {
@@ -37,14 +103,16 @@ class BrowserManager {
       sandbox: true,
       nodeIntegration: false,
       webSecurity: true,
+      backgroundThrottling: false,
     };
   }
-  register(win, parent) {
+  register(view, parent) {
     const id = String(this.nextId++);
-    this.windows.set(id, win);
+    this.views.set(id, view);
     this.lastId = id;
-    win.setMenu(null);
-    const wc = win.webContents;
+    this.host.contentView.addChildView(view);
+    this.layout();
+    const wc = view.webContents;
     const navigation = (url) =>
       this.emit({ kind: "browserEvent", event: "navigation", page: id, url });
     wc.on("did-navigate", (_, url) => navigation(url));
@@ -57,21 +125,54 @@ class BrowserManager {
     wc.on("will-redirect", (event, url) => {
       if (url !== "about:blank" && !allowedURL(url)) event.preventDefault();
     });
-    wc.setWindowOpenHandler(({ url }) => ({
-      action: url === "about:blank" || allowedURL(url) ? "allow" : "deny",
-      overrideBrowserWindowOptions: {
-        width: 1280,
-        height: 850,
-        show: this.visible,
-        webPreferences: this.preferences(),
-      },
-    }));
-    wc.on("did-create-window", (child) => this.register(child, id));
-    win.on("closed", () => {
-      this.windows.delete(id);
+    wc.on("content-bounds-updated", (event) => event.preventDefault());
+    wc.on("did-start-navigation", (_, __, inPlace, main) => {
+      if (main && !inPlace) this.errors.delete(id);
+    });
+    wc.on("did-fail-load", (_, code, description, __, main) => {
+      if (main && code !== -3)
+        this.errors.set(
+          id,
+          `网页加载失败（${description}），可重试或检查网络。`,
+        );
+    });
+    wc.on("render-process-gone", () =>
+      this.errors.set(id, "网页进程已退出，请停止任务后重新加载。"),
+    );
+    wc.setWindowOpenHandler((details) => {
+      if (details.url !== "about:blank" && !allowedURL(details.url))
+        return { action: "deny" };
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { webPreferences: this.preferences() },
+        createWindow: (options) => {
+          const child = new WebContentsView({
+            ...options,
+            webPreferences: {
+              ...options.webPreferences,
+              ...this.preferences(),
+            },
+          });
+          const created = this.register(child, id);
+          if (this.taskPages.has(id)) this.taskPages.add(created.id);
+          if (details.disposition === "background-tab")
+            child.webContents.loadURL(details.url).catch(() => {});
+          return child.webContents;
+        },
+      };
+    });
+    wc.once("destroyed", () => {
+      if (this.host && !this.host.isDestroyed())
+        this.host.contentView.removeChildView(view);
+      this.views.delete(id);
+      this.taskPages.delete(id);
+      this.errors.delete(id);
+      if (this.lastId === id)
+        this.lastId = [...this.views.keys()].at(-1) || null;
+      this.layout();
       this.emit({ kind: "browserEvent", event: "closed", page: id });
     });
-    win.on("focus", () => {
+    wc.on("focus", () => {
       this.lastId = id;
     });
     if (parent)
@@ -85,30 +186,28 @@ class BrowserManager {
     return { id, url: wc.getURL() || "about:blank" };
   }
   create() {
-    const win = new BrowserWindow({
-      width: 1280,
-      height: 850,
-      show: this.visible,
-      title: "投递工作台 · BOSS 直聘",
-      backgroundColor: "#ffffff",
+    if (!this.host || this.host.isDestroyed())
+      throw Error("工作台窗口尚未就绪");
+    const view = new WebContentsView({
       webPreferences: this.preferences(),
     });
-    return this.register(win);
+    return this.register(view);
   }
   get(id) {
-    const win = this.windows.get(id);
-    if (!win || win.isDestroyed()) throw Error("浏览器窗口已关闭");
-    return win;
+    const view = this.views.get(id);
+    if (!view || view.webContents.isDestroyed())
+      throw Error("浏览器页面已关闭");
+    return view;
   }
   async showOrOpen(url) {
-    let id = this.windows.has(this.lastId)
+    let id = this.views.has(this.lastId)
       ? this.lastId
-      : this.windows.keys().next().value;
+      : this.views.keys().next().value;
     if (!id) id = this.create().id;
-    const win = this.get(id);
-    win.show();
-    win.focus();
-    if (url || !win.webContents.getURL()) {
+    this.activate(id, true);
+    this.host.show();
+    this.host.focus();
+    if (url || !this.get(id).webContents.getURL()) {
       await this.command("goto", {
         page: id,
         url: url || "https://www.zhipin.com/web/user/?ka=header-login",
@@ -118,18 +217,44 @@ class BrowserManager {
   }
   async command(method, params) {
     if (method === "primary") {
-      const id = [...this.windows.keys()][0];
+      const id = [...this.views.keys()][0];
+      for (const managedId of [...this.taskPages]) {
+        if (managedId !== id && this.views.has(managedId))
+          this.get(managedId).webContents.close({ waitForBeforeUnload: false });
+      }
+      if (id) this.activate(id);
       return id
         ? { id, url: this.get(id).webContents.getURL() }
         : this.create();
     }
-    if (method === "new") return this.create();
-    const win = this.get(params.page);
-    const wc = win.webContents;
+    if (method === "new") {
+      const created = this.create();
+      this.taskPages.add(created.id);
+      return created;
+    }
+    const wc = this.get(params.page).webContents;
     switch (method) {
       case "goto": {
         if (!allowedURL(params.url)) throw Error("只允许打开 BOSS 直聘网页");
-        await wc.loadURL(params.url);
+        this.activate(params.page);
+        // Resolve when the DOM is ready. Images and long-lived resources do not block the adapter.
+        await new Promise((resolve, reject) => {
+          const done = (error) => {
+            clearTimeout(timer);
+            wc.removeListener("dom-ready", ready);
+            wc.removeListener("destroyed", closed);
+            error ? reject(error) : resolve();
+          };
+          const ready = () => done();
+          const closed = () => done(Error("浏览器页面已关闭"));
+          const timer = setTimeout(
+            () => done(Error("网页加载超时，请检查网络")),
+            params.timeout || 20000,
+          );
+          wc.once("dom-ready", ready);
+          wc.once("destroyed", closed);
+          wc.loadURL(params.url).catch(done);
+        });
         return { url: wc.getURL() };
       }
       case "evaluate": {
@@ -142,10 +267,7 @@ class BrowserManager {
         return result.value;
       }
       case "click": {
-        if (this.visible) {
-          win.show();
-          win.focus();
-        }
+        this.activate(params.page, true);
         const point = { x: Math.round(params.x), y: Math.round(params.y) };
         wc.sendInputEvent({ type: "mouseMove", ...point });
         wc.sendInputEvent({
@@ -163,13 +285,10 @@ class BrowserManager {
         return true;
       }
       case "show":
-        if (this.visible) {
-          win.show();
-          win.focus();
-        }
+        this.activate(params.page);
         return true;
       case "close":
-        win.close();
+        wc.close({ waitForBeforeUnload: false });
         return true;
       case "screenshot": {
         const target = path.resolve(params.path),
@@ -191,21 +310,66 @@ class BrowserManager {
     }
   }
   async status() {
-    let loggedIn = false;
-    for (const win of this.windows.values()) {
+    const loginChecks = [...this.views.values()].map(async (view) => {
       try {
-        if (new URL(win.webContents.getURL()).hostname !== "www.zhipin.com")
-          continue;
-        loggedIn ||= await win.webContents.executeJavaScript(
+        if (new URL(view.webContents.getURL()).hostname !== "www.zhipin.com")
+          return false;
+        return await view.webContents.executeJavaScript(
           `Array.from(document.querySelectorAll('a[href*="/web/geek/recommend"]')).some(e=>e.getClientRects().length && e.innerText.trim() && e.innerText.trim()!=='推荐')`,
         );
-      } catch {}
-    }
-    return { open: this.windows.size, loggedIn };
+      } catch {
+        return false;
+      }
+    });
+    // Loading web content must not hold up pause/stop controls or the UI snapshot.
+    let timer;
+    const checks = await Promise.race([
+      Promise.all(loginChecks),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), 250);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (checks) this.loggedIn = checks.some(Boolean);
+    const loggedIn = this.loggedIn || false;
+    return {
+      open: this.views.size,
+      loggedIn,
+      activeId: this.lastId,
+      tabs: [...this.views].map(([id, view]) => {
+        const wc = view.webContents;
+        return {
+          id,
+          title: wc.getTitle() || "BOSS 直聘",
+          url: wc.getURL().split(/[?#]/)[0],
+          loading: wc.isLoadingMainFrame(),
+          error: this.errors.get(id) || "",
+          canGoBack: wc.navigationHistory.canGoBack(),
+          canGoForward: wc.navigationHistory.canGoForward(),
+        };
+      }),
+    };
+  }
+  async navigate(action) {
+    if (["login", "jobs"].includes(action))
+      return this.showOrOpen(
+        action === "login"
+          ? "https://www.zhipin.com/web/user/?ka=header-login"
+          : "https://www.zhipin.com/web/geek/jobs",
+      );
+    const wc = this.get(this.lastId).webContents;
+    if (action === "back" && wc.navigationHistory.canGoBack())
+      wc.navigationHistory.goBack();
+    else if (action === "forward" && wc.navigationHistory.canGoForward())
+      wc.navigationHistory.goForward();
+    else if (action === "reload") wc.reload();
+    else throw Error("当前无法执行此浏览器操作");
+    return true;
   }
   destroy() {
-    for (const win of this.windows.values())
-      if (!win.isDestroyed()) win.destroy();
+    for (const view of [...this.views.values()])
+      if (!view.webContents.isDestroyed())
+        view.webContents.close({ waitForBeforeUnload: false });
   }
 }
 module.exports = { BrowserManager, allowedURL };

@@ -574,7 +574,7 @@ select:disabled {
 }
 .limit-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 20px;
 }
 .unit-input {
@@ -987,6 +987,236 @@ footer {
 }
 .history-detail > .btn {
   margin-top: 10px;
+}
+.batch-setup {
+  margin: -7px 0 22px;
+  border: 1px solid #dde8e1;
+  border-radius: 11px;
+  background: white;
+  padding: 0 0 14px;
+}
+.batch-setup fieldset {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  align-items: start;
+  gap: 28px;
+  padding-bottom: 0;
+}
+.batch-target {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.batch-target .field {
+  width: 128px;
+  flex-shrink: 0;
+}
+.quick-choices {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+}
+.quick-choices button {
+  border: 1px solid #dfe8e2;
+  border-radius: 6px;
+  background: #f8faf9;
+  color: #6c8676;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+.quick-choices .chosen {
+  color: #176e52;
+  background: #e9f3ee;
+  border-color: #a9c7b5;
+}
+.batch-setup > p {
+  margin: 2px 22px 0;
+  font-size: 11px;
+  color: #85998c;
+}
+.batch-setup > .quota-note {
+  color: #a47934;
+  margin-top: 6px;
+}
+.page-content.browser-page {
+  max-width: none;
+  height: calc(100vh - 76px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.browser-page > .notice {
+  flex-shrink: 0;
+  margin-bottom: 10px;
+}
+.browser-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #dce6df;
+  border-radius: 10px;
+  overflow: hidden;
+  background: white;
+}
+.browser-runbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 18px;
+  background: #f4f9f6;
+  flex-shrink: 0;
+}
+.browser-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.browser-progress strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.browser-progress span {
+  color: #7a9082;
+  font-size: 11px;
+}
+.browser-progress progress {
+  width: 100%;
+  height: 4px;
+  accent-color: #1c7557;
+  border: 0;
+  border-radius: 3px;
+}
+progress::-webkit-progress-bar {
+  background: #e0eae3;
+  border-radius: 3px;
+}
+progress::-webkit-progress-value {
+  background: #278363;
+  border-radius: 3px;
+}
+.browser-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-bottom: 1px solid #e3ebe6;
+  font-size: 11px;
+  color: #7d9084;
+  min-height: 36px;
+  flex-shrink: 0;
+}
+.browser-step span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.browser-step i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #a8bbb0;
+  flex-shrink: 0;
+}
+.browser-step i.pulsing {
+  background: #389775;
+}
+.browser-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  background: #f3f6f4;
+  padding: 6px 9px 0;
+  min-height: 35px;
+  flex-shrink: 0;
+}
+.browser-tab {
+  display: flex;
+  align-items: center;
+  border-radius: 6px 6px 0 0;
+  max-width: 240px;
+  min-width: 130px;
+  color: #879b8d;
+}
+.browser-tab.selected {
+  background: white;
+  color: #3d6b50;
+}
+.browser-tab button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 9px;
+  min-width: 0;
+  font-size: 11px;
+}
+.browser-tab button[role="tab"] {
+  flex: 1;
+}
+.browser-tab span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-tab svg {
+  flex-shrink: 0;
+}
+.browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e4ebe7;
+  flex-shrink: 0;
+}
+.browser-toolbar .btn {
+  min-height: 30px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+.browser-address {
+  flex: 1;
+  min-width: 80px;
+  padding: 8px 10px;
+  border: 1px solid #e5eae6;
+  border-radius: 5px;
+  background: #f8faf9;
+  color: #829589;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-viewport {
+  flex: 1;
+  min-height: 0;
+  background: white;
+}
+.browser-error {
+  color: #a06d43;
+  background: #fff6e9;
+  padding: 10px 15px;
+  font-size: 12px;
+}
+.spinning {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
+  }
 }
 @media (max-width: 1180px) {
   .sidebar {

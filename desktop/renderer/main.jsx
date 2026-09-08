@@ -29,8 +29,29 @@ import {
   Save,
 } from "lucide-react";
 import "./style.css";
+import BrowserPanel from "./BrowserPanel.jsx";
 
 const api = window.desk;
+const pacePresets = {
+  流畅: {
+    action_delay: [0.6, 1.4],
+    job_delay: [8, 16],
+    cooldown_every: 5,
+    cooldown_seconds: [30, 60],
+  },
+  均衡: {
+    action_delay: [1, 2],
+    job_delay: [12, 22],
+    cooldown_every: 5,
+    cooldown_seconds: [45, 90],
+  },
+  从容: {
+    action_delay: [1.5, 3.5],
+    job_delay: [15, 30],
+    cooldown_every: 5,
+    cooldown_seconds: [60, 120],
+  },
+};
 const labels = {
   starting: "准备中",
   running: "运行中",
@@ -154,6 +175,20 @@ function App() {
   function update(group, key, value) {
     setDraft((d) => ({ ...d, [group]: { ...d[group], [key]: value } }));
   }
+  function setTarget(value) {
+    setDraft((d) => ({
+      ...d,
+      run: { ...d.run, max_sends: value },
+      search: {
+        ...d.search,
+        max_jobs: Math.max(d.search.max_jobs, Math.min(2000, value * 5)),
+      },
+    }));
+  }
+  function openBrowser(url) {
+    setPage("browser");
+    return url ? api.openJob({ url }) : api.openBrowser();
+  }
   async function save() {
     const clean = structuredClone(draft);
     clean.search.filters = Object.fromEntries(
@@ -173,11 +208,12 @@ function App() {
   function start(mode) {
     act(async () => {
       await save();
+      setConfirm(false);
+      setPage("browser");
       return api.start({ mode });
     })
       .then(() => {
         setConfirm(false);
-        setPage("workspace");
       })
       .catch(() => {});
   }
@@ -188,6 +224,7 @@ function App() {
     draft && state && JSON.stringify(draft) !== JSON.stringify(state.config);
   const nav = [
     ["workspace", LayoutDashboard, "任务工作台"],
+    ["browser", Monitor, "BOSS 浏览器"],
     ["history", History, "投递记录"],
     ["logs", ScrollText, "运行日志"],
     ["settings", Settings, "偏好与数据"],
@@ -227,7 +264,11 @@ function App() {
             <button
               key={key}
               className={page === key ? "nav-item active" : "nav-item"}
-              onClick={() => setPage(key)}
+              onClick={
+                key === "browser"
+                  ? action(() => openBrowser())
+                  : () => setPage(key)
+              }
             >
               <Icon size={18} />
               {title}
@@ -244,7 +285,7 @@ function App() {
             </div>
           </div>
           <span className="version">
-            桌面版 {state?.version || "0.2.0"} <span>Electron</span>
+            桌面版 {state?.version || "—"} <span>Electron</span>
           </span>
         </div>
       </aside>
@@ -263,12 +304,16 @@ function App() {
               <i />
               {state?.browser.loggedIn ? "浏览器已登录" : "浏览器待登录"}
             </span>
-            <Button icon={Monitor} onClick={action(() => api.openBrowser())}>
-              打开浏览器 <ArrowUpRight size={13} />
+            <Button icon={Monitor} onClick={action(() => openBrowser())}>
+              {state?.browser.loggedIn ? "查看浏览器" : "扫码登录"}
             </Button>
           </div>
         </header>
-        <div className="page-content">
+        <div
+          className={
+            "page-content " + (page === "browser" ? "browser-page" : "")
+          }
+        >
           {notice && (
             <div
               role="alert"
@@ -288,6 +333,15 @@ function App() {
             />
           ) : (
             <>
+              {page === "browser" && (
+                <BrowserPanel
+                  state={state}
+                  busy={busy}
+                  obscured={!!confirm || !!selected}
+                  action={action}
+                  onWorkspace={() => setPage("workspace")}
+                />
+              )}
               {page === "workspace" && (
                 <>
                   <div className="page-heading">
@@ -372,6 +426,91 @@ function App() {
                       )}
                     </div>
                   </section>
+                  <section className="batch-setup" aria-label="本次投递设置">
+                    <fieldset disabled={locked}>
+                      <div className="batch-target">
+                        <Field label="本次投递次数">
+                          <div className="unit-input">
+                            <input
+                              type="number"
+                              min="1"
+                              max="200"
+                              value={draft.run.max_sends}
+                              onChange={(e) =>
+                                setTarget(Number(e.target.value))
+                              }
+                            />
+                            <span>次</span>
+                          </div>
+                        </Field>
+                        <div
+                          className="quick-choices"
+                          aria-label="投递次数快捷选项"
+                        >
+                          {[5, 10, 20, 50].map((n) => (
+                            <button
+                              key={n}
+                              className={
+                                draft.run.max_sends === n ? "chosen" : ""
+                              }
+                              onClick={() => setTarget(n)}
+                            >
+                              {n} 次
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <Field
+                        label="操作节奏"
+                        hint="随机停顿；页面就绪即继续，可在下方微调。"
+                      >
+                        <select
+                          value={
+                            Object.entries(pacePresets).find(([, preset]) =>
+                              Object.entries(preset).every(
+                                ([key, value]) =>
+                                  JSON.stringify(draft.run[key]) ===
+                                  JSON.stringify(value),
+                              ),
+                            )?.[0] || "自定义"
+                          }
+                          onChange={(e) => {
+                            const preset = pacePresets[e.target.value];
+                            if (preset)
+                              setDraft((d) => ({
+                                ...d,
+                                run: { ...d.run, ...preset },
+                              }));
+                          }}
+                        >
+                          <option value="自定义">自定义节奏</option>
+                          {Object.keys(pacePresets).map((name) => (
+                            <option key={name}>{name}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    </fieldset>
+                    <p>
+                      最多尝试 {draft.run.max_sends} 个新职位 · 浏览上限{" "}
+                      {draft.search.max_jobs} 个 · 今日还可尝试{" "}
+                      {Math.max(0, draft.run.daily_limit - state.attemptsToday)}{" "}
+                      次。重复和不匹配的职位不占投递次数。
+                    </p>
+                    {draft.run.max_sends >
+                      Math.max(
+                        0,
+                        draft.run.daily_limit - state.attemptsToday,
+                      ) && (
+                      <p className="quota-note">
+                        本次会在今日剩余额度用完时结束，可在“运行节奏”调整每日上限。
+                      </p>
+                    )}
+                    {draft.search.max_jobs < draft.run.max_sends && (
+                      <p className="quota-note">
+                        浏览上限低于投递目标，请提高下方浏览上限以继续寻找候选职位。
+                      </p>
+                    )}
+                  </section>
                   {run &&
                     ["needs_attention", "failed", "interrupted"].includes(
                       run.status,
@@ -382,7 +521,7 @@ function App() {
                           {run.note}
                           。打开浏览器处理后，可重新运行；历史记录会阻止重复发送。
                         </span>
-                        <button onClick={action(() => api.openBrowser())}>
+                        <button onClick={action(() => openBrowser())}>
                           查看浏览器 <ArrowRight size={15} />
                         </button>
                       </div>
@@ -696,20 +835,6 @@ function App() {
                       </span>
                     </div>
                     <fieldset disabled={locked} className="limit-grid">
-                      <Field label="本次最多发送">
-                        <div className="unit-input">
-                          <input
-                            type="number"
-                            min="1"
-                            max="200"
-                            value={draft.run.max_sends}
-                            onChange={(e) =>
-                              update("run", "max_sends", Number(e.target.value))
-                            }
-                          />
-                          <span>次</span>
-                        </div>
-                      </Field>
                       <Field label="每日尝试上限">
                         <div className="unit-input">
                           <input
@@ -816,9 +941,7 @@ function App() {
                                   <button
                                     className="icon-button"
                                     aria-label={"打开职位 " + row.title}
-                                    onClick={action(() =>
-                                      api.openJob({ url: row.url }),
-                                    )}
+                                    onClick={action(() => openBrowser(row.url))}
                                   >
                                     <ArrowUpRight size={17} />
                                   </button>
@@ -1127,10 +1250,12 @@ function App() {
               )}
             </>
           )}
-          <footer>
-            <ShieldCheck size={13} /> 以网站实际送达回执为准 ·
-            不确定的发送不会自动重试
-          </footer>
+          {page !== "browser" && (
+            <footer>
+              <ShieldCheck size={13} /> 以网站实际送达回执为准 ·
+              不确定的发送不会自动重试
+            </footer>
+          )}
         </div>
       </main>
       {confirm && draft && (
@@ -1161,6 +1286,11 @@ function App() {
               <dt>最多尝试</dt>
               <dd>
                 {draft.run.max_sends} 次 · 每日上限 {draft.run.daily_limit} 次
+              </dd>
+              <dt>今日剩余</dt>
+              <dd>
+                {Math.max(0, draft.run.daily_limit - state.attemptsToday)} 次 ·
+                本轮最多浏览 {draft.search.max_jobs} 个
               </dd>
               <dt>沟通方式</dt>
               <dd>
@@ -1220,6 +1350,7 @@ function App() {
                 onClick={action(async () => {
                   await api.start({ mode: "verify", jobId: selected.job_id });
                   setSelected(null);
+                  setPage("browser");
                 }, "正在只读核对历史消息的送达状态")}
               >
                 只读核对送达
@@ -1269,7 +1400,10 @@ function App() {
             )}
             <Button
               icon={ArrowUpRight}
-              onClick={action(() => api.openJob({ url: selected.url }))}
+              onClick={action(async () => {
+                await openBrowser(selected.url);
+                setSelected(null);
+              })}
             >
               在浏览器查看职位
             </Button>

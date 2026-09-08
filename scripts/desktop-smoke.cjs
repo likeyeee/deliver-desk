@@ -1,5 +1,5 @@
 // Every HTTPS request is fulfilled by synthetic HTML in an isolated, temporary session.
-const { app } = require("electron");
+const { app, BaseWindow, WebContentsView } = require("electron");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -12,7 +12,7 @@ const temp = require("node:fs").mkdtempSync(
   path.join(os.tmpdir(), "deliverdesk-smoke-"),
 );
 app.setPath("userData", path.join(temp, "profile"));
-let backend, browser;
+let backend, browser, host, shellView;
 async function until(check, timeout = 25000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -37,14 +37,42 @@ app
     );
     const requests = [];
     let fixtureJob = "abc123";
+    let fixtureJobs = [fixtureJob];
+    host = new BaseWindow({
+      width: 1360,
+      height: 940,
+      show: true,
+    });
+    shellView = new WebContentsView({
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    host.contentView.addChildView(shellView);
+    host.once("closed", () => {
+      if (!shellView.webContents.isDestroyed())
+        shellView.webContents.close({ waitForBeforeUnload: false });
+    });
+    await shellView.webContents.loadURL("about:blank");
     browser = new BrowserManager(temp, (data) => backend?.send(data), {
       partition: "desktop-smoke",
-      // X11 needs a mapped window to receive native mouse events under Xvfb.
-      visible: process.platform === "linux",
+      host,
+      shellView,
+    });
+    browser.setViewport({
+      visible: true,
+      bounds: { x: 220, y: 220, width: 1100, height: 640 },
     });
     await browser.session.protocol.handle("https", (request) => {
       requests.push(request.url);
       const route = new URL(request.url).pathname;
+      const detailId = route.match(/\/job_detail\/([\w-]+)\.html/);
+      if (detailId) fixtureJob = detailId[1];
+      const card = fixtures.LIST_HTML.match(
+        /<li class="new-card">[\s\S]*?<\/li>\n/,
+      )[0];
       let html = route.includes("/chat")
         ? fixtures.CHAT_HTML.replace(
             "message-item is-self",
@@ -60,13 +88,16 @@ app
               "this.textContent='继续沟通'",
               "location.href='/web/geek/chat'",
             )
-          : fixtures.LIST_HTML;
-      html = html
-        .replaceAll("abc123", fixtureJob)
-        .replace(
-          "</body>",
-          "<style>body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
-        );
+          : fixtures.LIST_HTML.replace(
+              /<ul class="results">[\s\S]*?<\/ul>\s*<aside>/,
+              `<ul class="results">${fixtureJobs.map((id) => card.replaceAll("abc123", id)).join("")}</ul><aside>`,
+            );
+      if (route.includes("/chat") || detailId)
+        html = html.replaceAll("abc123", fixtureJob);
+      html = html.replace(
+        "</body>",
+        "<style>body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
+      );
       return new Response(html, {
         headers: { "content-type": "text/html;charset=utf-8" },
       });
@@ -124,6 +155,53 @@ app
     assert.equal(state.attemptsToday, 1);
     assert.ok(requests.some((url) => url.includes("/web/geek/chat")));
     console.log("PASS: custom message, visible receipt, persistent history");
+    assert.equal(
+      BaseWindow.getAllWindows().length,
+      1,
+      "All job and chat popups must stay in one host window",
+    );
+    assert.ok(
+      [...browser.views.values()].every((view) =>
+        host.contentView.children.includes(view),
+      ),
+    );
+    const selectedView = browser.get(browser.lastId);
+    assert.equal(selectedView.getBounds().x, 220);
+    browser.setViewport({ visible: false });
+    assert.equal(host.contentView.children.at(-1), browser.shellView);
+    await selectedView.webContents.executeJavaScript(
+      "window.nativeHiddenClick = false; const probe = document.createElement('button'); probe.id='native-probe'; probe.style='position:fixed;left:0;top:0;width:60px;height:60px;z-index:9999'; probe.onclick=()=>{window.nativeHiddenClick=true};document.body.append(probe)",
+    );
+    await browser.command("click", { page: browser.lastId, x: 25, y: 25 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(
+      await selectedView.webContents.executeJavaScript(
+        "window.nativeHiddenClick",
+      ),
+      true,
+      "Native operations continue when the user switches to logs or the workspace",
+    );
+    await selectedView.webContents.executeJavaScript(
+      "document.getElementById('native-probe').remove()",
+    );
+    browser.setViewport({ visible: true });
+    assert.ok(selectedView.getVisible());
+    assert.equal(
+      await selectedView.webContents.executeJavaScript(
+        "typeof require + ':' + typeof window.desk",
+      ),
+      "undefined:undefined",
+    );
+    assert.equal(
+      await selectedView.webContents.executeJavaScript(
+        "window.open('https://example.org/') === null",
+      ),
+      true,
+    );
+    assert.equal(BaseWindow.getAllWindows().length, 1);
+    console.log(
+      "PASS: embedded views, native popup containment, hiding and remote-page isolation",
+    );
     await backend.request("start", { mode: "send" });
     state = await until(async () => {
       const s = await backend.request("snapshot");
@@ -181,13 +259,45 @@ app
     await backend.ready;
     assert.equal((await backend.request("snapshot")).history[0].status, "sent");
     console.log("PASS: backend restart preserves history");
-    fixtureJob = "abc789";
+    fixtureJobs = ["abc123", "batch001", "batch002", "batch003", "batch004"];
+    config.search.max_jobs = 20;
+    config.run.max_sends = 3;
+    config.run.action_delay = [0, 0];
+    await backend.request("saveConfig", { config });
+    const batchStart = Date.now();
+    browser.setViewport({ visible: false });
+    await backend.request("start", { mode: "send" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 60000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.events.slice(-8)),
+    );
+    assert.equal(state.run.sent, 3);
+    assert.equal(state.run.attempts, 3);
+    assert.equal(state.run.target, 3);
+    assert.equal(state.run.skipped, 1);
+    assert.equal(state.attemptsToday, 4);
+    assert.ok(!state.history.some((row) => row.job_id === "batch004"));
+    assert.match(state.run.note, /达到本次目标/);
+    assert.equal(BaseWindow.getAllWindows().length, 1);
+    const batchSeconds = (Date.now() - batchStart) / 1000;
+    browser.setViewport({ visible: true });
+    console.log(
+      `PASS: three consecutive sends, prior-job dedup, exact target stop (${batchSeconds.toFixed(1)}s fixture runtime)`,
+    );
+    fixtureJobs = ["abc789"];
+    config.search.max_jobs = 1;
+    config.run.max_sends = 1;
     config.run.action_delay = [0.8, 0.8];
     await backend.request("saveConfig", { config });
     await backend.request("start", { mode: "send" });
     await until(async () =>
       (await backend.request("snapshot")).history.some(
-        (row) => row.job_id === fixtureJob && row.status === "sending",
+        (row) => row.job_id === "abc789" && row.status === "sending",
       ),
     );
     const beforeClose = Date.now();
@@ -207,15 +317,16 @@ app
     await backend.ready;
     state = await backend.request("snapshot");
     assert.equal(
-      state.history.find((row) => row.job_id === fixtureJob).status,
+      state.history.find((row) => row.job_id === "abc789").status,
       "unknown",
     );
-    assert.equal(state.attemptsToday, 2);
+    assert.equal(state.attemptsToday, 5);
     console.log(
       "PASS: exit during reserved send preserves uncertainty and prevents retry",
     );
     await backend.close();
     browser.destroy();
+    host.destroy();
     await fs.mkdir(path.join(root, "artifacts"), { recursive: true });
     await fs.writeFile(
       path.join(root, "artifacts", "desktop-smoke.json"),
@@ -226,6 +337,8 @@ app
           date: new Date().toISOString(),
           requests: requests.length,
           externalNetwork: false,
+          batchSends: 3,
+          batchSeconds,
         },
         null,
         2,
@@ -237,5 +350,6 @@ app
     console.error(error);
     await backend?.close();
     browser?.destroy();
+    host?.destroy();
     app.exit(1);
   });

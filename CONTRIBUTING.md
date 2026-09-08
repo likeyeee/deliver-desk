@@ -21,9 +21,10 @@ npm run lint
 npm run test:python
 npm run build:ui
 npm run test:desktop
+npm run test:ui
 ```
 
-Python 浏览器测试需要 Chrome，CI 覆盖 Linux、macOS 和 Windows。桌面集成测试在发行目标 macOS / Windows 上执行，使用临时目录和合成网页，拦截全部网站请求，不会联系真实招聘方。
+Python 浏览器测试需要 Chrome，CI 覆盖 Linux、macOS 和 Windows。桌面集成测试在发行目标 macOS / Windows 上执行，使用临时目录和合成网页，拦截全部网站请求，不会联系真实招聘方。UI 测试使用当前 Python Playwright 包自带的 Node 驱动启动真实应用，覆盖扫码入口、数量设置、自动切换、后台批量投递和窗口尺寸同步。
 
 修改打包、IPC 或任务服务时，还需验证打包后的核心：
 

@@ -11,16 +11,16 @@
 
 | 系统                  | 安装包                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- |
-| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.2.0/DeliverDesk-0.2.0-mac-arm64.dmg)   |
-| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.2.0/DeliverDesk-0.2.0-win-x64.exe) |
+| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.0/DeliverDesk-0.3.0-mac-arm64.dmg)   |
+| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.0/DeliverDesk-0.3.0-win-x64.exe) |
 
 安装包自带运行环境。当前为未签名测试版；[安装说明与验证范围](docs/desktop-guide.md)。
 
 ## 使用
 
-1. 打开应用，在内置浏览器中扫码登录。
+1. 点击 **扫码登录**，在主窗口的 **BOSS 浏览器** 中完成登录。
 2. 设置关键词、城市、筛选条件和招呼语，点击 **预览职位**。
-3. 确认结果后点击 **开始投递**；运行中可暂停、继续或停止。
+3. 设置 **本次投递次数** 和节奏，点击 **开始投递**；自动切到浏览器，可暂停、继续或停止。
 4. 在 **投递记录** 查看结果、只读核对送达，或导出 CSV。
 
 历史去重跨重启保留；无法确认的发送不会自动重试。登录和记录保存在本机。“投递”指发起沟通，不自动上传简历附件。
@@ -56,10 +56,10 @@ docs/           使用、架构、适配与发布记录
 
 ## 最新更新
 
-### 2026-09-08
+### 2026-09-09
 
-- 提供 macOS / Windows 桌面安装包，支持预览、投递控制、历史和 CSV 导出。
-- 增加目标职位核对、历史去重和“只读核对送达”。
-- 修复 Windows 打包服务的中文编码问题。
+- 浏览器嵌入主窗口，扫码、职位和聊天页面统一显示；开始任务后自动切换。
+- 自定义每轮 1–200 次投递，显示目标进度、每日余额和提前结束原因。
+- 提供三档操作节奏，减少重复加载和等待，查看日志时任务可继续执行。
 
 [完整发布记录](docs/releases/release-notes.md)

@@ -1,16 +1,24 @@
-# 投递工作台 0.2
+# 投递工作台
 
-Electron + React 桌面界面，复用 Python 的搜索、匹配、去重、任务控制和 SQLite 历史。安装包自带运行环境，使用者无需安装 Python、Node.js 或命令行工具。
+安装包自带运行环境，无需安装 Python、Node.js 或命令行工具。
 
 ## 使用
 
-1. 打开应用，点击右上角“打开浏览器”，在 BOSS 直聘网站完成登录。扫码过期时点击网站自己的“点击刷新”。登录使用应用自己的浏览器目录；普通 Chrome 的账号不会被复制进来。
+1. 点击右上角“扫码登录”。BOSS 网站直接显示在主窗口的“BOSS 浏览器”页；扫码过期时点击网站自己的“点击刷新”。登录会保存在本机，升级后继续使用。
 2. 填写关键词、城市、薪资、经验和学历。其他条件在“更多匹配条件”里；所有筛选文字必须与网站提供的选项一致。
 3. 点击“预览职位”。这一步不会点击立即沟通或发送消息。通过预览确认职位范围。
-4. 设置招呼语和数量，点击“开始投递”，核对界面显示的范围后启动。运行中可暂停、继续或停止。
+4. 在启动区填写“本次投递次数”（1–200），或选择 5 / 10 / 20 / 50 次，再选择操作节奏。点击“开始投递”并确认范围，界面自动切到浏览器，显示进度和当前步骤。运行中可暂停、继续或停止；切到日志或工作台后任务仍可继续。
 5. 在“投递记录”查看实际文本与结果，导出 CSV；“运行日志”显示进度和失败原因。待核对记录可点击“只读核对送达”，重新检查原消息、目标职位与网站回执，成功后更新历史。这一步不发送新消息；无法确认时保留原状态并继续阻止自动重发。
 
 只建立沟通不会计为“已送达”。自定义消息需同时出现新的本人消息、输入框清空和送达/已读回执才计为发送成功。招聘方已明确拒绝的会话不会继续发消息。
+
+## 次数与节奏
+
+- “本次投递次数”限制新发起的尝试，重复记录和不匹配职位不占用次数。已尝试和确认送达分别显示，未确认结果仍会停止整批。
+- “每日尝试上限”独立生效。启动区显示今日余额；目标高于余额时会提前提示，不会自动调大每日上限。
+- 调大投递次数会同步扩大浏览范围。“本次最多浏览”、搜索关键词和翻页范围仍会限制可发现的职位；如果不足以完成目标，结束时会显示具体原因。
+- “流畅”“均衡”“从容”提供不同的随机间隔，也可在“运行节奏”和“偏好与数据”里自定义。流畅档的职位间隔为 8–16 秒，每 5 次休息 30–60 秒；实际耗时还取决于页面和回执加载。
+- 已登录页面与详情页会复用，页面内容就绪后继续处理；批次休息不再叠加普通职位间隔。浏览器中的返回、刷新和关闭按钮在任务运行时禁用，避免切走正在操作的目标。
 
 遇到安全验证、网站限制、页面空白或收件人无法核对，任务停止并保留浏览器和现场。请在浏览器手动处理，然后重新运行。程序不绕过验证、不更换账号、不自动重发不确定的消息。
 
@@ -30,11 +38,12 @@ npm ci
 npm start
 ```
 
-开发环境的数据默认位于 `.boss-cli/desktop/state`。显式设置 `DELIVERDESK_WORKSPACE=1` 可在开发时读取当前项目的 `.boss-cli` 历史，但发行应用忽略这个开关。
+开发环境的数据默认位于 `.boss-cli/desktop/state`。`DELIVERDESK_DEV_DATA_DIR` 可指定独立开发数据目录；`DELIVERDESK_WORKSPACE=1` 可读取当前项目的 `.boss-cli` 历史。发行应用忽略这两个开关。
 
 ```sh
 uv run pytest -q
 npm run test:desktop
+npm run test:ui
 npm run build:backend
 npx electron scripts/desktop-smoke.cjs --packaged-backend
 node scripts/build-icons.cjs
@@ -54,7 +63,7 @@ npx electron-builder --config desktop/windows-cross.cjs --win --x64 --publish ne
 
 ## 浏览器问题的处理
 
-原 CLI 使用 Playwright 驱动 Chrome 时，本机出现过 BOSS code=37 与 about:blank。桌面版改用 Electron 自有浏览器，通过主进程提供的 DOM 和鼠标接口执行现有任务流程，不连接普通 Chrome 的调试端口。远程网站窗口不加载应用 preload，Node.js 关闭，沙箱和隔离开启。
+原 CLI 使用 Playwright 驱动 Chrome 时，本机出现过 BOSS code=37 与 about:blank。桌面版改用 Electron 自有浏览器，通过主进程提供的 DOM 和鼠标接口执行现有任务流程，不连接普通 Chrome 的调试端口。网站使用独立的 WebContentsView，不加载应用 preload，Node.js 关闭，沙箱和隔离开启。
 
 2026-09-08 的真实验证已完成：新浏览器恢复登录，自动搜索“AI应用”，选择泉州、经验不限，读取详情并预览；随后通过完整聊天页自动发送一条自定义招呼。首次发送后，旧消息选择器漏识别了网站已经显示的“送达”。修正为新版己方消息结构后，重启应用并执行“只读核对送达”，确认原文和回执仍存在，历史更新为已送达；再次处理同一真实职位时，在浏览器操作前直接跳过，发送尝试数未增加。
 
@@ -62,4 +71,4 @@ npx electron-builder --config desktop/windows-cross.cjs --win --x64 --publish ne
 
 自动检查覆盖 Python 核心、浏览器和进程测试，以及 Electron 与打包 Python 服务的隔离流程。macOS / Windows 的原生服务均已在 GitHub Actions 执行；结果见 [CI](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml) 和 [原生构建](https://github.com/likeyeee/deliver-desk/actions/workflows/desktop-build.yml)。macOS 安装版已实际启动并恢复登录；Windows 安装向导和真实账号登录仍需实机验收。网站后续布局变化可能需要继续适配。
 
-参考依据：[Electron WebContents](https://www.electronjs.org/docs/latest/api/web-contents)、[Electron 安全建议](https://www.electronjs.org/docs/latest/tutorial/security)、[Python Windows 嵌入式发行包](https://docs.python.org/3/using/windows.html#the-embeddable-package)、[electron-builder 跨平台构建](https://www.electron.build/docs/features/multi-platform-build/)。原有 BOSS 页面适配研究见 [GitHub 项目研究](research/github-reference.md)。
+参考依据：[Electron WebContentsView](https://www.electronjs.org/docs/latest/api/web-contents-view)、[BaseWindow](https://www.electronjs.org/docs/latest/api/base-window)、[Electron 安全建议](https://www.electronjs.org/docs/latest/tutorial/security)、[Python Windows 嵌入式发行包](https://docs.python.org/3/using/windows.html#the-embeddable-package)、[electron-builder 跨平台构建](https://www.electron.build/docs/features/multi-platform-build/)。原有 BOSS 页面适配研究见 [GitHub 项目研究](research/github-reference.md)。

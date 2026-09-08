@@ -61,10 +61,16 @@ jobs:
       - name: Test desktop on supported release platforms
         if: runner.os != 'Linux'
         run: npm run test:desktop
+      - name: Test actual desktop UI and embedded browser
+        if: runner.os != 'Linux'
+        run: npm run test:ui
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: test-result-${{ runner.os }}
-          path: artifacts/desktop-smoke.json
+          path: |
+            artifacts/desktop-smoke.json
+            artifacts/desktop-ui-smoke.json
+            artifacts/desktop-*-ui.png
           if-no-files-found: ignore
           retention-days: 7

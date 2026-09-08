@@ -171,6 +171,90 @@ async def test_existing_contact_skipped(config, store, job):
     assert store.attempts_today() == 0
 
 
+@pytest.mark.parametrize(
+    ("target", "browse", "daily", "expected", "reason"),
+    [(3, 30, 20, 3, "本次目标"), (5, 2, 20, 2, "浏览上限"), (5, 30, 2, 2, "每日尝试上限")],
+)
+async def test_batch_honors_target_and_reports_earlier_limits(
+    config, store, job, target, browse, daily, expected, reason
+):
+    config.run.max_sends = target
+    config.search.max_jobs = browse
+    config.run.daily_limit = daily
+    jobs = []
+    for i in range(8):
+        candidate = copy.deepcopy(job)
+        candidate.job_id = f"batch{i}"
+        candidate.url = f"https://www.zhipin.com/job_detail/batch{i}.html"
+        jobs.append(candidate)
+    adapter = FakeAdapter(jobs)
+    runner = Runner(config, store, "test-run", send=True)
+    await runner.execute(adapter)
+    assert adapter.greeted == expected
+    assert runner.attempts == expected
+    assert store.run("test-run")["attempts"] == expected
+    assert store.attempts_today() == expected
+    assert reason in runner.completion_note()
+
+
+async def test_batch_skips_do_not_spend_send_target(config, store, job):
+    store.save_job(job)
+    store.reserve(job, "test-run", "old message", 20)
+    store.delivery(job.job_id, "sent", "old receipt")
+    candidates = [job]
+    for i in range(5):
+        candidate = copy.deepcopy(job)
+        candidate.job_id = f"new{i}"
+        candidates.append(candidate)
+    candidates[1].title = "销售代表"
+    config.run.max_sends = 3
+    runner = Runner(config, store, "test-run", send=True)
+    adapter = FakeAdapter(candidates)
+    await runner.execute(adapter)
+    assert adapter.greeted == 3
+    assert runner.counts["skipped"] == 2
+    assert store.blocked("new4") is None
+
+
+async def test_batch_rest_replaces_regular_interval_and_skips_final_wait(config, store, job):
+    config.run.max_sends = 3
+    config.run.job_delay = (15, 30)
+    config.run.cooldown_every = 2
+    config.run.cooldown_seconds = (60, 120)
+    candidates = []
+    for i in range(3):
+        candidate = copy.deepcopy(job)
+        candidate.job_id = f"pace{i}"
+        candidates.append(candidate)
+    runner = Runner(config, store, "test-run", send=True)
+    waits = []
+
+    async def delay(bounds):
+        waits.append(bounds)
+
+    runner.control.delay = delay
+    await runner.execute(FakeAdapter(candidates))
+    assert waits.count((15, 30)) == 1
+    assert waits.count((60, 120)) == 1
+    assert waits[-1] == (0, 0)  # Only the final inspection; no wait after the target.
+
+
+def test_existing_database_gains_progress_without_losing_history(store, job):
+    store.save_job(job)
+    store.reserve(job, "test-run", "saved message", 20)
+    store.delivery(job.job_id, "sent", "saved receipt")
+    store.db.execute("ALTER TABLE runs DROP COLUMN target")
+    store.db.execute("ALTER TABLE runs DROP COLUMN attempts")
+    upgraded = Store(store.directory)
+    try:
+        assert upgraded.run("test-run")["target"] == 0
+        assert upgraded.run("test-run")["attempts"] == 0
+        assert upgraded.history()[0]["message"] == "saved message"
+        assert upgraded.blocked(job.job_id) == "sent"
+    finally:
+        upgraded.close()
+
+
 async def test_pause_resume_and_stop_interrupt_long_delay(store):
     control = Controller(store, "test-run")
     store.update_run("test-run", control="pause")

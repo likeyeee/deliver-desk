@@ -61,8 +61,12 @@ class Store:
         );
         CREATE INDEX IF NOT EXISTS events_run ON events(run_id, id);
         CREATE INDEX IF NOT EXISTS deliveries_day ON deliveries(attempted_day);
-        PRAGMA user_version=1;
         """)
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(runs)")}
+        for name in ("target", "attempts"):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE runs ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
+        self.db.execute("PRAGMA user_version=2")
 
     def close(self):
         self.db.close()
@@ -102,6 +106,8 @@ class Store:
             "skipped",
             "errors",
             "note",
+            "target",
+            "attempts",
         }
         if not values or set(values) - allowed:
             raise ValueError("非法任务字段")

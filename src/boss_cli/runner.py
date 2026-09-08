@@ -42,7 +42,7 @@ class Runner:
             self.console.print(f"[{kind}] {message}", markup=False, highlight=False)
 
     def update(self):
-        self.store.update_run(self.run_id, **self.counts)
+        self.store.update_run(self.run_id, attempts=self.attempts, **self.counts)
 
     def skip(self, job: Job, reason: str):
         self.counts["skipped"] += 1
@@ -102,6 +102,7 @@ class Runner:
             return
         self.reserved_job = job.job_id
         self.attempts += 1
+        self.update()
         self.log("sending", "开始沟通，发送状态已落盘", job)
         try:
             result = await adapter.greet(job, message)
@@ -126,10 +127,13 @@ class Runner:
         self.update()
         if self.limit_reached():
             return
-        await self.control.delay(self.config.run.job_delay)
         if self.attempts % self.config.run.cooldown_every == 0:
             self.log("cooldown", "进入配置的批次休息间隔")
             await self.control.delay(self.config.run.cooldown_seconds)
+        else:
+            low, high = self.config.run.job_delay
+            self.log("interval", f"等待 {low:g}–{high:g} 秒后继续下一个职位")
+            await self.control.delay(self.config.run.job_delay)
 
     async def execute(self, adapter: BossAdapter):
         seen: set[str] = set()
@@ -162,14 +166,22 @@ class Runner:
                     break
 
     def limit_reached(self) -> bool:
+        return self.limit_reason() is not None
+
+    def limit_reason(self) -> str | None:
+        if self.send and self.attempts >= self.config.run.max_sends:
+            return f"已达到本次目标：尝试 {self.attempts} 次，确认送达 {self.counts['sent']} 次"
+        if self.send and self.store.attempts_today() >= self.config.run.daily_limit:
+            return f"已达到每日尝试上限 {self.config.run.daily_limit} 次"
         if self.counts["scanned"] >= self.config.search.max_jobs:
-            return True
-        if self.send and (
-            self.attempts >= self.config.run.max_sends
-            or self.store.attempts_today() >= self.config.run.daily_limit
-        ):
-            return True
-        return False
+            return f"已达到浏览上限 {self.config.search.max_jobs} 个职位；可提高浏览上限继续筛选"
+        return None
+
+    def completion_note(self) -> str:
+        return self.limit_reason() or (
+            f"本轮搜索范围已遍历：尝试 {self.attempts} 次，确认送达 {self.counts['sent']} 次；"
+            "可调整关键词、筛选或翻页范围后继续"
+        )
 
 
 async def run_task(
@@ -199,7 +211,12 @@ async def run_task(
                     previous_signals[sig] = previous
                 except (NotImplementedError, RuntimeError, ValueError):
                     pass
-            store.update_run(run_id, status="running", pid=os.getpid())
+            store.update_run(
+                run_id,
+                status="running",
+                pid=os.getpid(),
+                target=config.run.max_sends if mode == "send" else 0,
+            )
             runner.log("start", f"任务 {run_id} 已启动，模式：{mode}")
             session = None
             try:
@@ -248,8 +265,9 @@ async def run_task(
                         runner.log("login", f"待登录时的页面截图：{directory / 'login.png'}")
                         await adapter.login(config.browser.login_timeout_seconds)
                         await runner.execute(adapter)
-                store.update_run(run_id, status="completed", note="任务完成", **runner.counts)
-                runner.log("complete", "任务完成")
+                note = runner.completion_note() if mode in {"send", "preview"} else "任务完成"
+                store.update_run(run_id, status="completed", note=note, **runner.counts)
+                runner.log("complete", note)
             except (StopRequested, asyncio.CancelledError):
                 store.update_run(
                     run_id, status="stopped", note="已停止，已登记的发送状态保留", **runner.counts

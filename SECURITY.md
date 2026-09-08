@@ -1,6 +1,6 @@
 # 安全问题
 
-当前维护 `0.2.x`。请通过 [GitHub 私密漏洞报告](https://github.com/likeyeee/deliver-desk/security/advisories/new) 提交问题，说明受影响版本、复现步骤和影响范围；不要在公开 Issue 中上传可利用细节或账号数据。
+当前维护 `0.3.x`。请通过 [GitHub 私密漏洞报告](https://github.com/likeyeee/deliver-desk/security/advisories/new) 提交问题，说明受影响版本、复现步骤和影响范围；不要在公开 Issue 中上传可利用细节或账号数据。
 
 ## 数据与信任边界
 

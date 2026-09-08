@@ -13,6 +13,7 @@ from pathlib import Path
 
 from filelock import Timeout
 
+from . import __version__
 from .browser import LayoutChanged, clean_error
 from .config import Config, dump_config, load_config
 from .control import is_active, task_lock
@@ -170,7 +171,7 @@ async def serve(directory, config_path):
         loop.call_soon_threadsafe(queue.put_nowait, None)
 
     threading.Thread(target=reader, daemon=True).start()
-    emit({"kind": "ready", "version": "0.2.0"})
+    emit({"kind": "ready", "version": __version__})
     try:
         while (line := await queue.get()) is not None:
             data = {}
