@@ -190,6 +190,10 @@ async def serve(directory, config_path):
 
 
 def main():
+    # Frozen Windows executables may ignore Python encoding environment variables.
+    # The Electron parent always sends and expects UTF-8 JSON Lines.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)

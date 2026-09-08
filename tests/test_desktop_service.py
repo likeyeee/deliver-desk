@@ -1,4 +1,8 @@
 import asyncio
+import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -79,3 +83,40 @@ async def test_windows_style_event_loop_does_not_fail_during_cleanup(monkeypatch
     run = await run_task(Config(), tmp_path / "windows", factory=UnavailableBrowser)
     assert run["status"] == "needs_attention"
     assert run["note"] == "synthetic browser unavailable"
+
+
+def test_service_round_trips_unicode_when_host_uses_legacy_encoding(tmp_path):
+    config = Config().model_dump(mode="json")
+    config["search"]["keywords"] = ["数据分析"]
+    config["message"]["template"] = "您好，期待交流 👋"
+    commands = [
+        {"id": "save", "method": "saveConfig", "params": {"config": config}},
+        {"id": "read", "method": "snapshot"},
+    ]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "boss_cli.desktop_service",
+            "--data-dir",
+            str(tmp_path / "状态"),
+            "--config",
+            str(tmp_path / "配置.yaml"),
+        ],
+        input="".join(json.dumps(command, ensure_ascii=False) + "\n" for command in commands),
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        env={**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252"},
+        timeout=10,
+        check=True,
+    )
+    replies = {
+        data["id"]: data
+        for line in result.stdout.splitlines()
+        if (data := json.loads(line)).get("kind") == "reply"
+    }
+    assert "error" not in replies["save"]
+    persisted = replies["read"]["result"]["config"]
+    assert persisted["search"]["keywords"] == ["数据分析"]
+    assert persisted["message"]["template"] == "您好，期待交流 👋"

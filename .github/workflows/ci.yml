@@ -58,6 +58,12 @@ jobs:
         run: uv run playwright install chrome
       - run: npm run test:python
       - run: npm run build:ui
+      - name: Configure Electron sandbox
+        if: runner.os == 'Linux'
+        run: |
+          node -e "require('electron')"
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:desktop
       - if: runner.os != 'Linux'

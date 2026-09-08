@@ -42,7 +42,7 @@ npx electron-builder --config desktop/windows-cross.cjs --win --x64 --publish ne
 1. 同步 `package.json`、`pyproject.toml`、`src/boss_cli/__init__.py` 及锁文件中的版本。
 2. 合并当天的 [发布记录](releases/release-notes.md)，更新 README 最新更新。
 3. 等待 CI 与原生构建通过，检查实际启动、登录恢复和只读预览。
-4. 将两个平台产物放在 `release/`，运行 `npm run release:prepare`，生成源码包、`SHA256SUMS.txt` 和内容审计。
+4. 提交全部改动，将两个平台产物放在 `release/`，运行 `npm run release:prepare`。脚本从当前 Git 提交生成源码包，直接检查 ZIP 内的运行环境与应用归档，输出 `SHA256SUMS.txt` 和内容审计。
 5. 把 DMG / EXE / ZIP、校验文件及版本说明上传至 Releases。源码仓库不存安装包和用户运行数据。
 
 首次发行是未签名测试版。正式签名需由维护者配置自己的证书及 macOS 公证凭据；不要提交证书或凭据到仓库。

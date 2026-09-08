@@ -60,5 +60,6 @@ docs/           使用、架构、适配与发布记录
 
 - 提供 macOS / Windows 桌面安装包，支持预览、投递控制、历史和 CSV 导出。
 - 增加目标职位核对、历史去重和“只读核对送达”。
+- 修复 Windows 打包服务的中文编码问题。
 
 [完整发布记录](docs/releases/release-notes.md)
