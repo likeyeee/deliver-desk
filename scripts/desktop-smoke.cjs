@@ -169,22 +169,29 @@ app
     assert.equal(selectedView.getBounds().x, 220);
     browser.setViewport({ visible: false });
     assert.equal(host.contentView.children.at(-1), browser.shellView);
-    shellView.webContents.focus();
-    await selectedView.webContents.executeJavaScript(
-      "window.nativeHiddenClick = 0; const probe = document.createElement('button'); probe.id='native-probe'; probe.style='position:fixed;left:0;top:0;width:60px;height:60px;z-index:9999'; probe.onclick=(event)=>{if(event.isTrusted)window.nativeHiddenClick++};document.body.append(probe)",
-    );
-    await browser.command("click", { page: browser.lastId, x: 25, y: 25 });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(
+    for (const reload of [false, true]) {
+      if (reload)
+        await browser.command("goto", {
+          page: browser.lastId,
+          url: selectedView.webContents.getURL(),
+        });
+      shellView.webContents.focus();
       await selectedView.webContents.executeJavaScript(
-        "window.nativeHiddenClick",
-      ),
-      1,
-      "Native operations continue when the user switches to logs or the workspace",
-    );
-    await selectedView.webContents.executeJavaScript(
-      "document.getElementById('native-probe').remove()",
-    );
+        "window.nativeHiddenClick = 0; const probe = document.createElement('button'); probe.id='native-probe'; probe.style='position:fixed;left:0;top:0;width:60px;height:60px;z-index:9999'; probe.onclick=(event)=>{if(event.isTrusted)window.nativeHiddenClick++};document.body.append(probe)",
+      );
+      await browser.command("click", { page: browser.lastId, x: 25, y: 25 });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(
+        await selectedView.webContents.executeJavaScript(
+          "window.nativeHiddenClick",
+        ),
+        1,
+        `Native input continues behind the workspace, including after navigation (reload=${reload})`,
+      );
+      await selectedView.webContents.executeJavaScript(
+        "document.getElementById('native-probe').remove()",
+      );
+    }
     browser.setViewport({ visible: true });
     assert.ok(selectedView.getVisible());
     assert.equal(

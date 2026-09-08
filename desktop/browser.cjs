@@ -121,6 +121,9 @@ class BrowserManager {
     this.host.contentView.addChildView(view);
     this.layout();
     const wc = view.webContents;
+    // A navigation can replace the renderer while this view is covered. Apply
+    // the background policy to the new renderer so native input remains usable.
+    wc.on("dom-ready", () => wc.setBackgroundThrottling(false));
     const navigation = (url) =>
       this.emit({ kind: "browserEvent", event: "navigation", page: id, url });
     wc.on("did-navigate", (_, url) => navigation(url));
