@@ -1,6 +1,6 @@
 {
   "name": "deliver-desk",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": true,
   "description": "BOSS 直聘桌面求职工作台：职位筛选、沟通与本地历史",
   "author": "DeliverDesk",
@@ -13,7 +13,7 @@
     "build:backend": "uv run python scripts/build_backend.py",
     "pack:mac": "npm run build:ui && npm run build:backend && electron-builder --mac --arm64",
     "pack:win": "npm run build:ui && npm run build:backend && electron-builder --win --x64",
-    "test:desktop": "electron scripts/desktop-smoke.cjs",
+    "test:desktop": "node --test scripts/llm-test.cjs && electron scripts/desktop-smoke.cjs",
     "test:ui": "node scripts/desktop-ui-smoke.cjs",
     "lint": "uv run ruff check . && uv run ruff format --check . && prettier --check .",
     "format": "uv run ruff format . && prettier --write .",

@@ -27,9 +27,12 @@ import {
   CheckCheck,
   Filter,
   Save,
+  MessageSquare,
 } from "lucide-react";
 import "./style.css";
 import BrowserPanel from "./BrowserPanel.jsx";
+import AISettings from "./AISettings.jsx";
+import RepliesPanel from "./RepliesPanel.jsx";
 
 const api = window.desk;
 const pacePresets = {
@@ -74,6 +77,9 @@ const labels = {
   diagnose: "诊断",
   cua_assisted: "人工辅助",
   dedup_check: "去重核验",
+  reply_read: "读取会话",
+  reply_generate: "生成回复",
+  reply_send: "发送回复",
 };
 const split = (s) =>
   s
@@ -218,6 +224,12 @@ function App() {
       })
       .catch(() => {});
   }
+  async function saveModel() {
+    const config = { ...state.config, llm: structuredClone(draft.llm) };
+    const result = await api.saveConfig({ config });
+    setDraft((d) => ({ ...d, llm: result.llm }));
+    return result;
+  }
   const active = state?.active,
     run = state?.run,
     locked = busy || active;
@@ -226,6 +238,8 @@ function App() {
   const nav = [
     ["workspace", LayoutDashboard, "任务工作台"],
     ["browser", Monitor, "BOSS 浏览器"],
+    ["replies", MessageSquare, "消息回复"],
+    ["models", Sparkles, "模型与人格"],
     ["history", History, "投递记录"],
     ["logs", ScrollText, "运行日志"],
     ["settings", Settings, "偏好与数据"],
@@ -344,6 +358,31 @@ function App() {
                   action={action}
                   onWorkspace={() => setPage("workspace")}
                   onLogs={() => setPage("logs")}
+                />
+              )}
+              {page === "models" && (
+                <AISettings
+                  config={draft.llm}
+                  status={state.llm}
+                  locked={locked}
+                  dirty={
+                    JSON.stringify(draft.llm) !==
+                    JSON.stringify(state.config.llm)
+                  }
+                  update={(key, value) => update("llm", key, value)}
+                  save={saveModel}
+                  act={act}
+                  onReplies={() => setPage("replies")}
+                />
+              )}
+              {page === "replies" && (
+                <RepliesPanel
+                  state={state}
+                  locked={locked}
+                  act={act}
+                  saveModel={saveModel}
+                  onSettings={() => setPage("models")}
+                  onBrowser={action(() => openBrowser())}
                 />
               )}
               {page === "workspace" && (

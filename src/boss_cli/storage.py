@@ -61,12 +61,19 @@ class Store:
         );
         CREATE INDEX IF NOT EXISTS events_run ON events(run_id, id);
         CREATE INDEX IF NOT EXISTS deliveries_day ON deliveries(attempted_day);
+        CREATE TABLE IF NOT EXISTS replies (
+          id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          run_id TEXT REFERENCES runs(run_id), context_hash TEXT NOT NULL,
+          context TEXT NOT NULL, model TEXT NOT NULL, message TEXT NOT NULL,
+          status TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL, UNIQUE(job_id, context_hash)
+        );
         """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(runs)")}
         for name in ("target", "attempts"):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
-        self.db.execute("PRAGMA user_version=2")
+        self.db.execute("PRAGMA user_version=3")
 
     def close(self):
         self.db.close()
@@ -134,6 +141,10 @@ class Store:
             ("上次任务在发送期间退出，请到网站核对；不会自动重发", now()),
         )
         self.db.execute(
+            "UPDATE replies SET status='unknown',note=?,updated_at=? WHERE status='sending'",
+            ("上次回复期间退出，请到网站核对；不会自动重发", now()),
+        )
+        self.db.execute(
             "UPDATE runs SET status='interrupted',updated_at=?,note=? WHERE status IN ('starting','running','paused','stopping')",
             (now(), "上次进程已退出"),
         )
@@ -141,6 +152,113 @@ class Store:
     def blocked(self, job_id: str) -> str | None:
         row = self.db.execute("SELECT status FROM deliveries WHERE job_id=?", (job_id,)).fetchone()
         return row[0] if row and row[0] != "not_sent" else None
+
+    def reply_job(self, job_id: str) -> Job:
+        row = self.db.execute(
+            "SELECT j.data FROM jobs j JOIN deliveries d USING(job_id) WHERE job_id=? AND d.status IN ('sent','contacted','partial','unknown')",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("请选择投递记录中已经沟通过的职位")
+        return Job(**json.loads(row["data"]))
+
+    def reply_contacts(self) -> list[dict]:
+        result = []
+        for row in self.db.execute(
+            "SELECT j.data,d.updated_at FROM jobs j JOIN deliveries d USING(job_id) WHERE d.status IN ('sent','contacted','partial','unknown') ORDER BY d.updated_at DESC LIMIT 500"
+        ):
+            data = json.loads(row["data"])
+            result.append(
+                {key: data.get(key, "") for key in ("job_id", "title", "company", "recruiter")}
+                | {"updated_at": row["updated_at"]}
+            )
+        return result
+
+    def reply(self, reply_id: str) -> dict:
+        row = self.db.execute("SELECT * FROM replies WHERE id=?", (reply_id,)).fetchone()
+        if not row:
+            raise ValueError("回复草稿不存在，请重新读取会话")
+        return dict(row)
+
+    def reply_history(self, limit=100) -> list[dict]:
+        return [
+            dict(row)
+            for row in self.db.execute(
+                "SELECT r.id,r.job_id,r.model,r.message,r.status,r.note,r.created_at,r.updated_at,j.title,j.company FROM replies r JOIN jobs j USING(job_id) ORDER BY r.rowid DESC LIMIT ?",
+                (limit,),
+            )
+        ]
+
+    def check_reply_pending(self, job_id: str):
+        if self.db.execute(
+            "SELECT 1 FROM replies WHERE job_id=? AND status IN ('sending','unknown')", (job_id,)
+        ).fetchone():
+            raise ValueError("这个会话有待核对的回复，请先在回复记录中人工核实")
+
+    def save_reply(self, reply_id: str, job_id: str, context: dict, model: str, message: str):
+        self.check_reply_pending(job_id)
+        old = self.db.execute(
+            "SELECT id,status FROM replies WHERE job_id=? AND context_hash=?",
+            (job_id, context["fingerprint"]),
+        ).fetchone()
+        if old:
+            if old["status"] not in {"draft", "not_sent"}:
+                raise ValueError("这段会话已经回复，未重复生成")
+            reply_id = old["id"]
+        self.db.execute(
+            """INSERT INTO replies VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET model=excluded.model,message=excluded.message,
+            context=excluded.context,status='draft',note=excluded.note,updated_at=excluded.updated_at""",
+            (
+                reply_id,
+                job_id,
+                None,
+                context["fingerprint"],
+                json.dumps(context, ensure_ascii=False),
+                model,
+                message,
+                "draft",
+                "草稿待确认",
+                now(),
+                now(),
+            ),
+        )
+        return self.reply(reply_id)
+
+    def reserve_reply(self, reply_id: str, run_id: str, message: str, limit: int):
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            record = self.reply(reply_id)
+            if record["status"] != "draft":
+                raise ValueError("这条回复已处理，未重复发送")
+            self.check_reply_pending(record["job_id"])
+            if self.attempts_today() >= limit:
+                raise ValueError("今日发送上限（含投递和回复）已达到")
+            self.db.execute(
+                "UPDATE replies SET run_id=?,message=?,status='sending',note=?,updated_at=? WHERE id=?",
+                (run_id, message, "回复发送前已登记", now(), reply_id),
+            )
+            self.event(run_id, "INFO", "send_reserved", "预占回复发送名额", record["job_id"])
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def finish_reply(self, reply_id: str, status: str, note: str):
+        if status not in {"sent", "unknown", "not_sent"}:
+            raise ValueError("无效的回复状态")
+        self.db.execute(
+            "UPDATE replies SET status=?,note=?,updated_at=? WHERE id=?",
+            (status, note, now(), reply_id),
+        )
+
+    def resolve_reply(self, reply_id: str, status: str, note: str):
+        if status not in {"sent", "not_sent"} or not note.strip() or len(note) > 1000:
+            raise ValueError("请选择核实结果并填写 1–1000 字说明")
+        if self.reply(reply_id)["status"] != "unknown":
+            raise ValueError("只能人工核实待核对的回复")
+        self.finish_reply(reply_id, status, "人工核实：" + note.strip())
+        self.event(None, "INFO", "reply_resolved", f"回复人工核实为 {status}")
 
     def pending_message(self, job_id: str) -> tuple[Job, str]:
         row = self.db.execute(

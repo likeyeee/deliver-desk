@@ -5,11 +5,12 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 class Backend extends EventEmitter {
-  constructor({ root, resources, packaged, dataDir, config, browser }) {
+  constructor({ root, resources, packaged, dataDir, config, browser, llm }) {
     super();
     this.nextId = 1;
     this.pending = new Map();
     this.browser = browser;
+    this.llm = llm;
     this.closed = false;
     let executable, args;
     if (packaged) {
@@ -93,7 +94,20 @@ class Backend extends EventEmitter {
           ),
         });
       }
-    } else if (data.kind === "event") this.emit("event", data);
+    } else if (data.kind === "llm") {
+      try {
+        if (data.method !== "generate" || !this.llm)
+          throw Error("模型服务不可用");
+        this.send({
+          kind: "llmReply",
+          id: data.id,
+          result: await this.llm.generate(data.id, data.params),
+        });
+      } catch (error) {
+        this.send({ kind: "llmReply", id: data.id, error: error.message });
+      }
+    } else if (data.kind === "llmCancel") this.llm?.cancel(data.id);
+    else if (data.kind === "event") this.emit("event", data);
   }
   async request(method, params = {}) {
     await this.ready;
@@ -118,6 +132,7 @@ class Backend extends EventEmitter {
     this.emit("unavailable", error.message);
   }
   async close() {
+    this.llm?.close();
     if (this.closed) return;
     this.child.stdin.end();
     await new Promise((resolve) => {

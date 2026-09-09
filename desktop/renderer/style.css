@@ -1261,3 +1261,249 @@ progress::-webkit-progress-value {
     font-size: 10px;
   }
 }
+
+.ai-config-grid {
+  display: grid;
+  grid-template-columns: minmax(270px, 0.85fr) minmax(420px, 1.4fr);
+  gap: 22px;
+  align-items: start;
+}
+.ai-settings,
+.reply-contacts,
+.reply-compose,
+.ai-reply-history {
+  padding: 24px;
+  min-width: 0;
+}
+.ai-section-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 22px;
+  color: #507b63;
+}
+.ai-section-title h2 {
+  margin: 0;
+  color: #2b4938;
+  font-size: 16px;
+}
+.ai-section-title small {
+  color: #708378;
+  font-size: 11px;
+}
+.ai-section-title .badge {
+  margin-left: auto;
+}
+.ai-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.ai-hint {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #708378;
+  overflow-wrap: anywhere;
+}
+.ai-warning {
+  color: #a55b34;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.persona-editor {
+  min-height: 290px;
+  resize: vertical;
+  line-height: 1.9;
+}
+.ai-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.ai-privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 15px;
+  border-radius: 8px;
+  background: #f3f7f4;
+  margin-bottom: 20px;
+  color: #617c6b;
+}
+.ai-privacy svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.ai-privacy p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.reply-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.65fr) minmax(430px, 1.65fr);
+  gap: 22px;
+  align-items: start;
+}
+.reply-contacts > input {
+  width: 100%;
+}
+.reply-contact-list {
+  max-height: 580px;
+  overflow: auto;
+  margin-top: 15px;
+  display: grid;
+  gap: 7px;
+}
+.reply-contact {
+  text-align: left;
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #405d4c;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.reply-contact span {
+  font-size: 12px;
+  color: #718a7b;
+}
+.reply-contact strong {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.reply-contact.selected {
+  border-color: #bed7c8;
+  background: #eff6f1;
+}
+.reply-contact:hover:not(:disabled) {
+  background: #f3f7f4;
+}
+.reply-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+.reply-target h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+  line-height: 1.5;
+}
+.reply-target p {
+  margin: 0;
+  font-size: 12px;
+  color: #789080;
+}
+.reply-target .btn {
+  flex-shrink: 0;
+}
+.reply-transcript {
+  display: flex;
+  flex-direction: column;
+  max-height: 380px;
+  overflow: auto;
+  background: #f6f8f7;
+  border-radius: 8px;
+  padding: 18px;
+  gap: 13px;
+}
+.reply-bubble {
+  max-width: 88%;
+  align-self: flex-start;
+}
+.reply-bubble.assistant {
+  align-self: flex-end;
+}
+.reply-bubble small {
+  display: block;
+  font-size: 10px;
+  color: #7f9387;
+  margin-bottom: 5px;
+}
+.reply-bubble.assistant small {
+  text-align: right;
+}
+.reply-bubble p {
+  background: #fff;
+  border: 1px solid #e8ede9;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.reply-bubble.assistant p {
+  background: #e8f2eb;
+  border-color: #deebe2;
+}
+.reply-draft {
+  border-top: 1px solid #e8ede9;
+  padding-top: 20px;
+  margin-top: 20px;
+}
+.reply-draft textarea {
+  min-height: 140px;
+  line-height: 1.9;
+  resize: vertical;
+}
+.reply-history-message {
+  max-width: 400px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.reply-history-message p {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  margin: 0 0 5px;
+  max-height: 180px;
+  overflow: auto;
+}
+.ai-confirm {
+  width: 590px;
+  padding: 30px;
+  position: relative;
+}
+.ai-confirm h2 {
+  font-size: 20px;
+}
+.ai-confirm > p {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.reply-confirm-text {
+  padding: 18px;
+  background: #f2f7f4;
+  border-radius: 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 14px;
+  margin: 18px 0;
+}
+@media (max-width: 1160px) {
+  .ai-config-grid {
+    grid-template-columns: minmax(250px, 1fr) minmax(360px, 1.4fr);
+    gap: 16px;
+  }
+  .reply-grid {
+    grid-template-columns: minmax(210px, 0.65fr) minmax(390px, 1.65fr);
+    gap: 16px;
+  }
+  .ai-settings,
+  .reply-contacts,
+  .reply-compose {
+    padding: 18px;
+  }
+}

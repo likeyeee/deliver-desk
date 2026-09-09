@@ -86,6 +86,11 @@ async function run() {
               );
         if (route.includes("/chat") || detail)
           html = html.replaceAll("abc123", current);
+        if (route.includes("/chat") && globalThis.replyTestMode)
+          html = html.replace(
+            'id="messages">',
+            'id="messages"><div class="message-item item-myself"><div class="text-content">您好，我对这个职位很感兴趣。</div></div><div class="message-item"><div class="text-content">请问你做过哪些 AI 项目？</div></div>',
+          );
         if (route.includes("/chat"))
           html = html
             .replace(
@@ -292,6 +297,152 @@ async function run() {
     path: path.join(output, "desktop-workspace-ui.png"),
     fullPage: true,
   });
+  // Use only a made-up key and local responses. Node's fetch is mocked independently
+  // from Electron's already-intercepted BOSS session; no LLM request leaves the machine.
+  await desktop.evaluate(() => {
+    globalThis.replyTestMode = true;
+    globalThis.llmRequests = [];
+    globalThis.fetch = async (url, options) => {
+      if (url === "https://api.deepseek.com/models")
+        return new Response(
+          JSON.stringify({
+            data: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }],
+          }),
+        );
+      if (url !== "https://api.deepseek.com/chat/completions")
+        throw Error("Unexpected test network request");
+      globalThis.llmRequests.push(JSON.parse(options.body));
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content:
+                  "我做过一个面向内部知识库的 AI 问答项目，可以介绍需求分析和效果评估的过程。",
+              },
+            },
+          ],
+        }),
+      );
+    };
+  });
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "模型与人格", exact: true })
+    .click();
+  const fakeKey = "sk-desktop-ui-test-key-never-real";
+  await page.getByLabel("API Key", { exact: false }).fill(fakeKey);
+  await page.getByRole("button", { name: "保存密钥", exact: true }).click();
+  await until(async () => (await snapshot()).llm.configured);
+  await until(
+    async () =>
+      (await page.getByLabel("API Key", { exact: false }).inputValue()) === "",
+  );
+  assert.ok(
+    !(await fs.readFile(path.join(temp, "state", "deepseek-key.enc"))).includes(
+      Buffer.from(fakeKey),
+    ),
+  );
+  await page
+    .getByRole("button", { name: "测试连接并刷新模型", exact: true })
+    .click();
+  await page
+    .getByText("连接成功，已获取 2 个可用模型。", { exact: true })
+    .waitFor();
+  const persona =
+    "我是示例候选人，有三年产品经验。表达简洁、真诚；只根据我提供的信息回答，不编造经历。";
+  await page.getByLabel("系统提示词", { exact: false }).fill(persona);
+  await page.getByRole("button", { name: "保存模型配置", exact: true }).click();
+  await until(
+    async () => (await snapshot()).config.llm.system_prompt === persona,
+  );
+  assert.ok(!JSON.stringify(await snapshot()).includes(fakeKey));
+  assert.ok(
+    !(
+      await fs.readFile(path.join(temp, "state", "desktop.yaml"), "utf8")
+    ).includes(fakeKey),
+  );
+  for (const width of [1080, 1360]) {
+    await desktop.evaluate(
+      ({ BaseWindow }, width) =>
+        BaseWindow.getAllWindows()[0].setContentSize(width, 940),
+      width,
+    );
+    await until(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    );
+  }
+  await page.screenshot({
+    path: path.join(output, "desktop-models-ui.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "去生成回复", exact: true }).click();
+  await page.locator(".reply-contact").first().click();
+  await page.getByRole("button", { name: "读取对话", exact: true }).click();
+  await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.replyState.status === "ready";
+  }, 30000);
+  assert.equal(
+    (await snapshot()).replyState.context.messages.at(-1).content,
+    "请问你做过哪些 AI 项目？",
+  );
+  await page.getByRole("button", { name: "生成回复草稿", exact: true }).click();
+  await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.replyState.status === "draft";
+  }, 30000);
+  const modelRequests = await desktop.evaluate(() => globalThis.llmRequests);
+  assert.equal(modelRequests.length, 1);
+  assert.equal(modelRequests[0].messages[0].content, persona);
+  assert.equal(modelRequests[0].messages.at(-1).role, "user");
+  assert.equal(
+    (await snapshot()).attemptsToday,
+    3,
+    "Generating never reserves or sends a message",
+  );
+  const editedReply =
+    "我做过一个内部知识库问答项目，主要负责需求分析与效果评估。方便的话，我可以进一步介绍。";
+  await page
+    .getByRole("textbox", { name: "回复草稿", exact: true })
+    .fill(editedReply);
+  await page.screenshot({
+    path: path.join(output, "desktop-replies-ui.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "检查并发送", exact: true }).click();
+  assert.equal((await snapshot()).attemptsToday, 3);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认发送这条回复", exact: true })
+    .click();
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.replies[0]?.status === "sent" ? s : false;
+  }, 30000);
+  assert.equal(state.replies[0].message, editedReply);
+  assert.equal(state.history.length, 3);
+  assert.equal(state.attemptsToday, 4);
+  await assert.rejects(
+    () =>
+      page.evaluate(
+        (replyId) =>
+          window.desk.reply({ action: "send", replyId, message: "重复发送" }),
+        state.replies[0].id,
+      ),
+    /已处理/,
+  );
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "模型与人格", exact: true })
+    .click();
+  await page.getByRole("button", { name: "移除密钥", exact: true }).click();
+  await until(async () => !(await snapshot()).llm.configured);
+  console.log(
+    "PASS: encrypted DeepSeek key, connection test, persona, read conversation, editable draft, explicit send, receipt and duplicate prevention",
+  );
   assert.deepEqual(errors, []);
   await fs.writeFile(
     path.join(output, "desktop-ui-smoke.json"),
@@ -303,6 +454,7 @@ async function run() {
         windowCount: 1,
         resizeWidths: [1080, 1360, 1580, 1080],
         pageFitsWidth: true,
+        llmDraftAndReply: true,
       },
       null,
       2,

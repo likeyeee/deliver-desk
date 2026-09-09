@@ -39,6 +39,7 @@ app
     const verificationPopups = [];
     let fixtureJob = "abc123";
     let fixtureJobs = [fixtureJob];
+    let replyFixture = false;
     host = new BaseWindow({
       width: 1360,
       height: 940,
@@ -96,6 +97,11 @@ app
             );
       if (route.includes("/chat") || detailId)
         html = html.replaceAll("abc123", fixtureJob);
+      if (route.includes("/chat") && replyFixture)
+        html = html.replace(
+          'id="messages">',
+          'id="messages"><div class="message-item"><div class="text-content">请问你做过哪些 AI 项目？</div></div>',
+        );
       if (route.includes("/chat"))
         html = html
           .replace(
@@ -469,6 +475,101 @@ app
     console.log(
       "PASS: exit during reserved send preserves uncertainty and prevents retry",
     );
+    replyFixture = true;
+    const llmCalls = [];
+    backend.llm = {
+      async generate(_id, params) {
+        llmCalls.push(params);
+        return { message: "这是一条模型回复草稿。" };
+      },
+      cancel() {},
+      close() {},
+    };
+    config.run.action_delay = [0, 0];
+    await backend.request("saveConfig", { config });
+    for (const action of ["read", "generate"]) {
+      await backend.request("reply", { action, jobId: "batch003" });
+      state = await until(async () => {
+        const s = await backend.request("snapshot");
+        return !s.active ? s : false;
+      }, 30000);
+      assert.equal(
+        state.run.status,
+        "completed",
+        JSON.stringify(state.replyState),
+      );
+    }
+    assert.equal(llmCalls.length, 1);
+    assert.equal(
+      llmCalls[0].messages.at(-1).content,
+      "请问你做过哪些 AI 项目？",
+    );
+    assert.equal(state.attemptsToday, 5);
+    const replyId = state.replyState.draft.id;
+    const retainedChat = browser.lastId;
+    await browser.command("evaluate", {
+      page: retainedChat,
+      body: "document.querySelector('header strong').textContent='另一位招聘者'; return true;",
+    });
+    await backend.request("reply", {
+      action: "send",
+      replyId,
+      message: "不能发给切换后的联系人",
+    });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 30000);
+    assert.equal(state.run.status, "needs_attention");
+    assert.match(state.replyState.note, /会话发生变化/);
+    assert.equal(
+      state.attemptsToday,
+      5,
+      "A changed recipient is rejected before reserving a send",
+    );
+    await browser.command("evaluate", {
+      page: retainedChat,
+      body: "document.querySelector('header strong').textContent='示例招聘者'; return true;",
+    });
+    await backend.request("reply", { action: "read", jobId: "batch003" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 30000);
+    assert.equal(state.replyState.draft.id, replyId);
+    await backend.request("reply", {
+      action: "send",
+      replyId,
+      message: "人工编辑后确认的回复",
+    });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 30000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.replyState),
+    );
+    assert.equal(state.replies[0].status, "sent");
+    assert.equal(state.replies[0].message, "人工编辑后确认的回复");
+    assert.equal(state.attemptsToday, 6);
+    assert.equal(
+      state.history.find((row) => row.job_id === "batch003").status,
+      "sent",
+    );
+    await assert.rejects(
+      () =>
+        backend.request("reply", {
+          action: "send",
+          replyId,
+          message: "禁止重复",
+        }),
+      /已处理/,
+    );
+    console.log(
+      "PASS: RPC model generation, draft editing, conversation binding, reply receipt and dedup",
+    );
     await backend.close();
     browser.destroy();
     host.destroy();
@@ -484,6 +585,7 @@ app
           externalNetwork: false,
           batchSends: 3,
           batchSeconds,
+          llmDraftAndReply: true,
         },
         null,
         2,

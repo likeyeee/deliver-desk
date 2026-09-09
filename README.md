@@ -3,7 +3,7 @@
 [![CI](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/likeyeee/deliver-desk?include_prereleases)](https://github.com/likeyeee/deliver-desk/releases)
 
-本地运行的 BOSS 直聘求职工作台：筛选职位、预览文案、发起沟通、核对送达、管理历史。
+本地运行的 BOSS 直聘求职工作台：筛选职位、发起沟通、核对送达、管理历史，也可用 DeepSeek 生成人格化回复。
 
 ![投递工作台界面，使用示例数据](docs/assets/workspace.png)
 
@@ -11,8 +11,8 @@
 
 | 系统                  | 安装包                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- |
-| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.3/DeliverDesk-0.3.3-mac-arm64.dmg)   |
-| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.3/DeliverDesk-0.3.3-win-x64.exe) |
+| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.4.0/DeliverDesk-0.4.0-mac-arm64.dmg)   |
+| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.4.0/DeliverDesk-0.4.0-win-x64.exe) |
 
 安装包自带运行环境。当前为未签名测试版；[安装说明与验证范围](docs/desktop-guide.md)。
 
@@ -22,8 +22,9 @@
 2. 设置关键词、城市、筛选条件和招呼语，点击 **预览职位**。
 3. 设置 **本次投递次数** 和节奏，点击 **开始投递**；自动切到浏览器，可暂停、继续或停止。
 4. 在 **投递记录** 查看结果、只读核对送达，或导出 CSV。
+5. 在 **模型与人格** 配置 DeepSeek 和系统提示词，再到 **消息回复** 读取会话、生成草稿、编辑并确认发送。[使用说明](docs/llm-replies.md)
 
-历史去重跨重启保留；无法确认的发送不会自动重试。登录和记录保存在本机。“投递”指发起沟通，不自动上传简历附件。
+历史去重跨重启保留；无法确认的发送不会自动重试。登录和记录保存在本机；点击生成回复时，选中会话的近期消息和人格提示词会发送给 DeepSeek。“投递”指发起沟通，不自动上传简历附件。
 
 ## 开发
 
@@ -58,6 +59,7 @@ docs/           使用、架构、适配与发布记录
 
 ### 2026-09-09
 
+- 新增 DeepSeek 模型配置、自定义人格提示词和可编辑回复草稿，确认后发送并核对送达。
 - 修复同公司多招聘者导致未发送文字的问题；浏览器铺满窗口，网页宽度自动适配。
 - 修复有未读消息时停在简易聊天弹窗的问题，可继续进入完整会话并核对送达。
 - 修复发送按钮遮挡、聊天页反复闪跳，以及切到日志后偶发点击无响应的问题。

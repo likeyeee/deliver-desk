@@ -23,6 +23,7 @@ artifacts/
 *.log
 *.pem
 *.key
+deepseek-key.enc
 .coverage
 htmlcov/
 .idea/

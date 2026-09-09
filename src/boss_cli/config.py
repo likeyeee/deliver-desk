@@ -138,6 +138,33 @@ class RunConfig(StrictModel):
         return values
 
 
+class LLMConfig(StrictModel):
+    provider: Literal["deepseek"] = "deepseek"
+    model: str = Field(
+        default="deepseek-v4-flash", min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9._-]+$"
+    )
+    system_prompt: str = Field(
+        default=(
+            "你以我的身份与招聘者交流，使用自然、礼貌、简洁的中文。"
+            "只依据我提供的个人背景和对话事实回答，不编造工作经历、技能、薪资、"
+            "联系方式或可面试时间；信息不足时向对方澄清或保留待我补充。"
+            "只输出可以直接发送的一条回复，不附解释、分析、标题或引号，尽量在200字内。"
+        ),
+        min_length=1,
+        max_length=20000,
+    )
+    temperature: float = Field(default=0.7, ge=0, le=2, allow_inf_nan=False)
+    max_tokens: int = Field(default=1024, ge=128, le=4096)
+    context_messages: int = Field(default=20, ge=2, le=50)
+
+    @field_validator("model", "system_prompt")
+    @classmethod
+    def nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("模型和系统提示词不能为空")
+        return value.strip()
+
+
 class Config(StrictModel):
     state_dir: str = ".boss-cli"
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
@@ -145,6 +172,7 @@ class Config(StrictModel):
     match: MatchConfig = Field(default_factory=MatchConfig)
     message: MessageConfig = Field(default_factory=MessageConfig)
     run: RunConfig = Field(default_factory=RunConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     selectors: dict[str, str] = Field(default_factory=dict)
 
     def directory(self, config_path: Path) -> Path:

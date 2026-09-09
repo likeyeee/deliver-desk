@@ -18,16 +18,18 @@ CLI 直接复用 Python 核心，通过 Playwright 提供浏览器操作。桌�
 
 ## 模块
 
-| 位置                       | 职责                                  |
-| -------------------------- | ------------------------------------- |
-| `config.py` / `models.py`  | 配置校验与职位模型                    |
-| `matching.py`              | 标题、描述、公司、薪资匹配            |
-| `runner.py` / `control.py` | 任务流程、暂停、停止和数量限制        |
-| `storage.py`               | SQLite 历史、去重、名额预占与中断恢复 |
-| `browser.py`               | 网站元素、搜索、聊天目标和回执识别    |
-| `desktop_service.py`       | 桌面请求入口与后台任务                |
-| `desktop/backend.cjs`      | Python 子进程、请求关联与生命周期     |
-| `desktop/preload.cjs`      | 受限界面 API                          |
+| 位置                             | 职责                                        |
+| -------------------------------- | ------------------------------------------- |
+| `config.py` / `models.py`        | 配置校验与职位模型                          |
+| `matching.py`                    | 标题、描述、公司、薪资匹配                  |
+| `runner.py` / `control.py`       | 任务流程、暂停、停止和数量限制              |
+| `storage.py`                     | SQLite 历史、去重、名额预占与中断恢复       |
+| `browser.py`                     | 网站元素、搜索、聊天目标和回执识别          |
+| `desktop_service.py`             | 桌面请求入口与后台任务                      |
+| `desktop/backend.cjs`            | Python 子进程、请求关联与生命周期           |
+| `desktop/preload.cjs`            | 受限界面 API                                |
+| `replies.py` / `conversation.py` | 单个会话的上下文、草稿、确认发送与变化检测  |
+| `desktop/llm.cjs`                | 系统密钥加密、DeepSeek 请求、错误处理与取消 |
 
 ## 一次任务
 
@@ -45,5 +47,9 @@ CLI 直接复用 Python 核心，通过 Playwright 提供浏览器操作。桌�
 发行应用使用 Electron `userData` 下的 `state/`；开发版使用 `.boss-cli/desktop/state/`。浏览器登录目录由应用持有，不随配置导入改变。CLI 默认使用配置旁的 `.boss-cli/`。
 
 每个目录独立计数和去重，建议同一账号固定使用一个目录。SQLite 使用 WAL；失败诊断与截图只保存在本机。
+
+回复草稿与发送记录使用独立的 `replies` 表，原有 `deliveries` 职位去重不变。回复发送同样先登记并计入每日额度；不确定结果阻止该会话继续生成或发送，直到用户人工核实。上下文摘要排除未读数字和回执文字，发送前重新核对，避免回复过期消息。
+
+模型请求由 Python 后台任务通过独立 stdio 消息交给 Electron 主进程，主线程继续接收网页和模型响应。API Key 仅由主进程解密用于官方 HTTPS 请求，不进入 Python 配置或普通界面状态；停止任务会取消待处理请求。读取、生成和发送复用同一个已核对聊天页，其他批量任务仍正常清理辅助页。
 
 旧数据目录会补充任务的目标和尝试数字段，保留原有历史。目标写入本次任务记录，之后修改配置不会改写已完成任务的进度。

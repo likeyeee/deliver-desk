@@ -14,6 +14,7 @@ from playwright.async_api import Locator, Page, Response, async_playwright
 
 from .config import Config
 from .control import Controller
+from .conversation import MESSAGE_SCRIPT, conversation
 from .models import Job, canonical_job_url
 from .storage import private_dir
 
@@ -891,7 +892,20 @@ class BossAdapter:
         )
         return any([await item.is_visible() for item in await refusal.all()])
 
-    async def send_custom(self, page: Page, job: Job, message: str) -> SendResult:
+    async def read_conversation(self, page: Page, job: Job) -> dict:
+        await self.control.checkpoint()
+        await self.gate(page)
+        _, scope = await self.chat_target(page, job)
+        result = conversation(
+            await scope.evaluate(MESSAGE_SCRIPT), self.config.llm.context_messages
+        )
+        if await self.conversation_declined(scope):
+            result.update(canReply=False, reason="招聘方已拒绝沟通，请人工处理")
+        return result
+
+    async def send_custom(
+        self, page: Page, job: Job, message: str, *, expected_context: str | None = None
+    ) -> SendResult:
         # Sending a template is a second message if BOSS sent its default greeting on contact.
         # Never select a chat by list position or by recruiter name alone.
         editor, scope = await self.chat_target(page, job)
@@ -919,6 +933,10 @@ class BossAdapter:
             raise LayoutChanged("等待期间出现了新的草稿，未覆盖输入框")
         if await self.conversation_declined(scope):
             return SendResult("contacted", "招聘方已回复不合适/拒绝沟通，未追加自定义消息")
+        if expected_context:
+            context = await self.read_conversation(page, job)
+            if context["fingerprint"] != expected_context or not context["canReply"]:
+                raise LayoutChanged("会话出现新消息或已不适合回复，请重新读取后生成")
         await editor.fill(message)
         await self.control.delay(self.config.run.action_delay)
         # The user may switch conversations while a task is paused or waiting.
@@ -935,6 +953,11 @@ class BossAdapter:
             await editor.fill("")
             return SendResult("contacted", "招聘方在等待期间回复不合适，已清空本次草稿，未发送")
         await self.gate(page)
+        if expected_context:
+            context = await self.read_conversation(page, job)
+            if context["fingerprint"] != expected_context or not context["canReply"]:
+                await editor.fill("")
+                raise LayoutChanged("等待期间会话出现新消息，已清空本次草稿，未发送")
         send = (
             scope.get_by_role("button", name="发送", exact=True)
             .or_(scope.get_by_role("link", name="发送", exact=True))

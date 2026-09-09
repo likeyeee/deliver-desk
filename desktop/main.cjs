@@ -6,12 +6,14 @@ const {
   dialog,
   shell,
   Menu,
+  safeStorage,
 } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { BrowserManager } = require("./browser.cjs");
 const { Backend } = require("./backend.cjs");
+const { KeyVault, DeepSeek } = require("./llm.cjs");
 
 const root = path.resolve(__dirname, "..");
 if (!app.isPackaged)
@@ -33,7 +35,14 @@ let window,
   browser,
   quitting = false,
   quitPrompt = false;
-const serviceCommands = ["saveConfig", "start", "control", "resolve"];
+const serviceCommands = [
+  "saveConfig",
+  "start",
+  "control",
+  "resolve",
+  "reply",
+  "resolveReply",
+];
 function assertSender(event) {
   if (
     !window ||
@@ -105,6 +114,8 @@ else {
       await fs.mkdir(app.getPath("userData"), { recursive: true, mode: 0o700 });
       await fs.chmod(app.getPath("userData"), 0o700);
       await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
+      const vault = await new KeyVault(dataDir, safeStorage).init();
+      const llm = new DeepSeek(vault);
       browser = new BrowserManager(dataDir, (data) => backend?.send(data));
       backend = new Backend({
         root,
@@ -113,6 +124,7 @@ else {
         dataDir,
         config,
         browser,
+        llm,
       });
       backend.on("diagnostic", (message) => console.error(message));
       backend.on("unavailable", (message) => console.error(message));
@@ -125,7 +137,16 @@ else {
         ...(await backend.request("snapshot")),
         browser: await browser.status(),
         version: app.getVersion(),
+        llm: vault.status(),
       }));
+      handle("llm", async ({ action, key }) => {
+        if ((await backend.request("snapshot")).active)
+          throw Error("请先停止任务，再修改或测试模型配置");
+        if (action === "saveKey") return vault.save(key);
+        if (action === "removeKey") return vault.remove();
+        if (action === "test") return llm.test();
+        throw Error("无效的模型配置操作");
+      });
       handle("openBrowser", () => browser.showOrOpen());
       handle("browserViewport", (params) => browser.setViewport(params));
       handle("browserTab", async ({ id, close }) => {

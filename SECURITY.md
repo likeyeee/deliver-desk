@@ -1,10 +1,12 @@
 # 安全问题
 
-当前维护 `0.3.x`。请通过 [GitHub 私密漏洞报告](https://github.com/likeyeee/deliver-desk/security/advisories/new) 提交问题，说明受影响版本、复现步骤和影响范围；不要在公开 Issue 中上传可利用细节或账号数据。
+当前维护 `0.4.x`。请通过 [GitHub 私密漏洞报告](https://github.com/likeyeee/deliver-desk/security/advisories/new) 提交问题，说明受影响版本、复现步骤和影响范围；不要在公开 Issue 中上传可利用细节或账号数据。
 
 ## 数据与信任边界
 
 - 登录状态、配置和 SQLite 历史保存在用户自己的机器上。项目没有账号托管服务。
+- DeepSeek API Key 由主进程通过系统加密存储，不进入普通配置、导出文件或 Python 服务。生成回复时，仅将用户选择的会话上下文、目标职位与公司和系统提示词发送到 DeepSeek 官方接口。
+- 模型输出作为待确认草稿；发送前核对目标和会话变化，发送中的不确定结果不会自动重试。聊天文本不能调用工具或执行代码。
 - 远程网站窗口禁用 Node.js，不加载应用 preload；本地界面只能调用白名单 IPC 命令。
 - 导航限定 BOSS 网站；发送前核对职位 ID、公司及聊天目标。
 - 安装包和源码包不应包含 `.boss-cli/`、Cookie、聊天记录或个人配置。发布脚本检查产物内容。

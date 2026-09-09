@@ -53,9 +53,75 @@ async def test_inflight_start_cannot_be_repeated_or_reconfigured(service):
             await service.request("start", {"mode": "preview"})
         with pytest.raises(ValueError, match="停止"):
             await service.request("saveConfig", {"config": Config().model_dump(mode="json")})
+        with pytest.raises(ValueError, match="停止"):
+            await service.request("reply", {"action": "read", "jobId": "abc123"})
     finally:
         service.task.cancel()
         await asyncio.gather(service.task, return_exceptions=True)
+
+
+async def test_stopping_model_request_releases_worker_and_emits_cancellation(
+    service, job, monkeypatch
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from boss_cli.control import is_active
+    from boss_cli.conversation import conversation
+
+    service.store.create_run("contact", "send")
+    service.store.save_job(job)
+    service.store.mark_contacted(job, "contact")
+    service.store.update_run("contact", status="completed")
+
+    class Chat:
+        def is_closed(self):
+            return False
+
+    service.replies.chat = Chat()
+    service.replies.job_id = job.job_id
+
+    class Adapter:
+        def __init__(self, *_args):
+            self.chat_bindings = {}
+
+        def watch_page(self, _page):
+            pass
+
+        async def read_conversation(self, _page, _job):
+            return conversation(
+                [{"role": "user", "content": "可以介绍项目吗？", "supported": True}], 20
+            )
+
+    @asynccontextmanager
+    async def factory(*_args):
+        yield SimpleNamespace(owned_pages=[])
+
+    service.replies.factory = factory
+    monkeypatch.setattr("boss_cli.replies.BossAdapter", Adapter)
+    emitted = []
+    requested = asyncio.Event()
+
+    def emit(value):
+        emitted.append(value)
+        if value.get("kind") == "llm":
+            requested.set()
+
+    monkeypatch.setattr("boss_cli.desktop_service.emit", emit)
+    await service.request("reply", {"action": "read", "jobId": job.job_id})
+    await service.task
+    await service.request("reply", {"action": "generate", "jobId": job.job_id})
+    await asyncio.wait_for(requested.wait(), 2)
+    assert is_active(service.directory)
+    assert len(service.bridge.pending) == 1
+    await service.request("control", {"action": "stop"})
+    await service.task
+    assert not is_active(service.directory)
+    assert not service.bridge.pending
+    assert service.snapshot()["replyState"]["status"] == "stopped"
+    assert not service.snapshot()["replies"]
+    assert service.store.attempts_today() == 0
+    assert any(value.get("kind") == "llmCancel" for value in emitted)
 
 
 async def test_windows_style_event_loop_does_not_fail_during_cleanup(monkeypatch, tmp_path):

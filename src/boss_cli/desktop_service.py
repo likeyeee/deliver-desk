@@ -17,6 +17,7 @@ from . import __version__
 from .browser import LayoutChanged, clean_error
 from .config import Config, dump_config, load_config
 from .control import is_active, task_lock
+from .replies import ReplyWorkflow
 from .rpc_browser import RpcBrowser, RpcSession
 from .runner import run_task
 from .storage import Store, private_dir
@@ -30,17 +31,23 @@ class Bridge:
     def __init__(self):
         self.pending = {}
 
-    async def request(self, method, **params):
+    async def request(self, method, *, transport="browser", **params):
         key = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self.pending[key] = future
-        emit({"kind": "browser", "id": key, "method": method, "params": params})
+        emit({"kind": transport, "id": key, "method": method, "params": params})
         try:
-            return await asyncio.wait_for(future, 40)
+            return await asyncio.wait_for(future, 75 if transport == "llm" else 40)
         except TimeoutError as error:
-            raise LayoutChanged("浏览器操作超时，任务已保留现场") from error
+            raise LayoutChanged(
+                "模型请求超时，请手动重试"
+                if transport == "llm"
+                else "浏览器操作超时，任务已保留现场"
+            ) from error
         finally:
             self.pending.pop(key, None)
+            if transport == "llm":
+                emit({"kind": "llmCancel", "id": key})
 
     def reply(self, data):
         future = self.pending.get(data["id"])
@@ -63,6 +70,12 @@ class DesktopService:
         self.config.state_dir = str(directory)
         self.bridge = Bridge()
         self.browser = RpcBrowser(self.bridge)
+        self.replies = ReplyWorkflow(
+            self.store,
+            directory,
+            self.bridge,
+            lambda c, d, page: RpcSession(c, d, self.browser, retain_page=page),
+        )
         self.task = None
         self.run_id = None
         if not config_path.exists():
@@ -92,6 +105,9 @@ class DesktopService:
             "jobs": self.store.jobs(limit=500),
             "events": self.store.recent_events(150),
             "attemptsToday": self.store.attempts_today(),
+            "replyState": self.replies.state,
+            "replies": self.store.reply_history(),
+            "replyContacts": self.store.reply_contacts(),
             "directory": str(self.directory),
         }
 
@@ -102,6 +118,28 @@ class DesktopService:
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再修改配置")
             return self.save(params["config"])
+        if method == "reply":
+            if is_active(self.directory) or (self.task and not self.task.done()):
+                raise ValueError("请先停止当前任务，再处理回复")
+            action = params.get("action")
+            self.replies.validate(action, params)
+            self.run_id = uuid.uuid4().hex[:12]
+            self.task = asyncio.create_task(
+                self.replies.run(self.config.model_copy(deep=True), action, params, self.run_id)
+            )
+            self.task.add_done_callback(self.finished)
+            return {"runId": self.run_id}
+        if method == "resolveReply":
+            if self.task and not self.task.done():
+                raise ValueError("请先停止任务，再核对回复")
+            try:
+                with task_lock(self.directory):
+                    self.store.resolve_reply(
+                        params["replyId"], params["status"], params.get("note", "")
+                    )
+            except Timeout as error:
+                raise ValueError("任务运行时不能修改回复结果") from error
+            return self.snapshot()
         if method == "start":
             mode = params.get("mode")
             if mode not in {"login", "preview", "send", "diagnose", "verify"}:
@@ -131,6 +169,8 @@ class DesktopService:
             run = self.store.latest_run()
             if run and is_active(self.directory):
                 self.store.update_run(run["run_id"], control=action)
+                if action == "stop" and run["mode"].startswith("reply_") and self.task:
+                    self.task.cancel()
             return self.snapshot()
         if method == "resolve":
             if not params.get("note", "").strip():
@@ -177,7 +217,7 @@ async def serve(directory, config_path):
             data = {}
             try:
                 data = json.loads(line)
-                if data.get("kind") == "browserReply":
+                if data.get("kind") in {"browserReply", "llmReply"}:
                     service.bridge.reply(data)
                 elif data.get("kind") == "browserEvent":
                     service.browser.event(data)

@@ -677,3 +677,120 @@ async def test_custom_message_in_boss_dialog_with_div_send_button(web, job):
     await web.page.set_content(html)
     result = await web.send_custom(web.page, job, "您好，希望了解这个岗位。")
     assert result.status == "sent"
+
+
+async def add_reply_message(page, text="请问你做过哪些 AI 项目？", *, incoming=True):
+    await page.evaluate(
+        """({text, incoming}) => {
+          const row = document.createElement('div');
+          row.className = incoming ? 'message-item' : 'message-item item-myself';
+          const bubble = document.createElement('div'); bubble.className = 'text-content';
+          bubble.textContent = text; row.append(bubble);
+          document.getElementById('messages').append(row);
+        }""",
+        {"text": text, "incoming": incoming},
+    )
+
+
+async def test_reply_context_is_scoped_ordered_and_ignores_unread_badges(web, job):
+    await web.page.set_content(CHAT_HTML)
+    await add_reply_message(web.page, "您好，我对这个职位很感兴趣。", incoming=False)
+    await add_reply_message(web.page)
+    before = await web.read_conversation(web.page, job)
+    assert [m["role"] for m in before["messages"]] == ["assistant", "user"]
+    assert before["canReply"]
+    await web.page.evaluate("""() => {
+      const elsewhere = document.createElement('aside');
+      elsewhere.innerHTML = '<div class="message-item"><div class="text-content">其他人的私信</div></div>';
+      document.body.append(elsewhere);
+      document.querySelector('header').append(document.createTextNode(' 未读 91'));
+    }""")
+    after = await web.read_conversation(web.page, job)
+    assert before == after
+
+
+async def test_new_message_during_reply_delay_clears_own_draft_without_sending(
+    web, job, monkeypatch
+):
+    await web.page.set_content(CHAT_HTML)
+    await add_reply_message(web.page)
+    context = await web.read_conversation(web.page, job)
+
+    async def new_message(_bounds):
+        await add_reply_message(web.page, "补充一下，请发一下作品集。")
+
+    monkeypatch.setattr(web.control, "delay", new_message)
+    with pytest.raises(LayoutChanged, match="出现新消息"):
+        await web.send_custom(
+            web.page, job, "这里是我的回复", expected_context=context["fingerprint"]
+        )
+    assert await web.page.locator(".is-self").count() == 0
+    assert not (await web.page.locator("#chat-input").inner_text()).strip()
+
+
+async def test_attachment_and_conversation_switch_block_reply(web, job):
+    await web.page.set_content(CHAT_HTML)
+    await web.page.locator("#messages").evaluate(
+        'e => e.innerHTML = \'<div class="message-item"><div class="file-card">作品集.pdf</div></div>\''
+    )
+    assert not (await web.read_conversation(web.page, job))["canReply"]
+    await web.page.locator("header a").evaluate("e => e.href='/job_detail/wrong123.html'")
+    with pytest.raises(LayoutChanged, match="不一致"):
+        await web.read_conversation(web.page, job)
+
+
+async def test_reply_workflow_generates_edits_sends_and_blocks_stale_model_result(
+    web, config, store, job
+):
+    from contextlib import asynccontextmanager
+
+    from boss_cli.replies import ReplyWorkflow
+
+    store.save_job(job)
+    store.mark_contacted(job, "test-run")
+    store.update_run("test-run", status="completed")
+    await web.page.set_content(CHAT_HTML)
+    await add_reply_message(web.page)
+    payloads = []
+
+    class Model:
+        async def request(self, method, **params):
+            payloads.append(params)
+            return {"message": "模型生成的回复"}
+
+    @asynccontextmanager
+    async def factory(_config, _directory, _retained):
+        yield web.session
+
+    workflow = ReplyWorkflow(store, store.directory, Model(), factory)
+    workflow.chat, workflow.job_id = web.page, job.job_id
+    params = {"jobId": job.job_id}
+    await workflow.run(config, "read", params, "read-chat")
+    await workflow.run(config, "generate", params, "generate-draft")
+    assert workflow.state["status"] == "draft", workflow.state
+    assert payloads[0]["config"]["system_prompt"] == config.llm.system_prompt
+    assert payloads[0]["messages"][-1]["content"] == "请问你做过哪些 AI 项目？"
+    assert store.attempts_today() == 0
+    draft = workflow.state["draft"]
+    await workflow.run(
+        config, "send", {"replyId": draft["id"], "message": "编辑后确认发送的文字"}, "send-reply"
+    )
+    assert store.reply(draft["id"])["status"] == "sent", workflow.state
+    assert await web.page.locator(".is-self .text").inner_text() == "编辑后确认发送的文字"
+    assert store.attempts_today() == 1
+    assert store.history()[0]["status"] == "contacted"
+
+    await add_reply_message(web.page, "可以详细介绍吗？")
+    await workflow.run(config, "read", params, "read-again")
+
+    class SlowModel:
+        async def request(self, method, **params):
+            await add_reply_message(web.page, "先不用了，谢谢。")
+            return {"message": "已经过期的回复"}
+
+    workflow.bridge = SlowModel()
+    await workflow.run(config, "generate", params, "changed-chat")
+    assert workflow.state["status"] == "error"
+    assert "会话已变化" in workflow.state["note"]
+    assert workflow.state["draft"] is None
+    assert len(store.reply_history()) == 1

@@ -332,10 +332,14 @@ class BrowserManager {
     if (method === "primary") {
       const id = [...this.views.keys()][0];
       for (const managedId of [...this.taskPages]) {
-        if (managedId !== id && this.views.has(managedId))
+        if (
+          managedId !== id &&
+          managedId !== params.keep &&
+          this.views.has(managedId)
+        )
           this.get(managedId).webContents.close({ waitForBeforeUnload: false });
       }
-      if (id) this.activate(id);
+      if (id) this.activate(this.views.has(params.keep) ? params.keep : id);
       return id
         ? { id, url: this.get(id).webContents.getURL() }
         : this.create();

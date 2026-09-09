@@ -369,13 +369,19 @@ class RpcBrowser:
 
 
 class RpcSession(BrowserSession):
-    def __init__(self, config, directory, manager):
+    def __init__(self, config, directory, manager, *, retain_page=None):
         super().__init__(config, directory)
         self.manager = manager
+        self.retain_page = retain_page
 
     async def __aenter__(self):
         self.context = self.manager
-        data = await self.manager.bridge.request("primary")
+        data = await self.manager.bridge.request(
+            "primary",
+            keep=self.retain_page.id
+            if self.retain_page is not None and not self.retain_page.is_closed()
+            else None,
+        )
         self.page = self.manager.ensure(data["id"])
         self.page.url = data["url"]
         self.page.timeout = self.config.browser.timeout_seconds
