@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -108,6 +109,62 @@ CSS_PATH = """e => {
     parts.unshift(tag+':nth-of-type('+(siblings.indexOf(e)+1)+')');e=e.parentElement;
   }
   return parts.join(' > ');
+}"""
+
+# Keep a verified identity tied to the actual editor and identity DOM nodes.
+# Message/receipt updates are deliberately outside the watched identity roots.
+CHAT_BINDING = r"""scope => {
+  const options=__OPTIONS__, key=Symbol.for('deliverdesk.chatIdentity');
+  const editor=document.querySelector(options.editor), control=document.querySelector(options.control);
+  if(!editor || !control || !scope.contains(editor) || !scope.contains(control))
+    throw Error('核对期间会话结构发生变化');
+  const norm=e=>(e.innerText || '').replace(/\s+/g,' ').trim();
+  const history='.chat-record, .chat-message, .im-list, .message-list, #messages';
+  const dynamic=e=>e.contains(editor) || e.matches(history) || !!e.querySelector(history);
+  let card=control;
+  while(card && card!==scope && !norm(card).includes(options.title)) card=card.parentElement;
+  if(!card || card===scope || dynamic(card)) throw Error('无法单独核对会话职位卡片');
+  const companies=[...scope.querySelectorAll('*')].filter(e=>
+    e.getClientRects().length && norm(e).includes(options.company) &&
+    ![...e.children].some(child=>norm(child).includes(options.company)) &&
+    !e.closest(history) && !editor.contains(e));
+  if(!companies.length) throw Error('无法单独核对会话公司');
+  let roots=[card,...companies].map(e=>{
+    while(e.parentElement && e.parentElement!==scope && !dynamic(e.parentElement)) e=e.parentElement;
+    return e;
+  });
+  roots=[...new Set(roots)].filter(e=>!roots.some(other=>other!==e && other.contains(e)));
+  editor[key]?.dispose();
+  let valid=true, checking=true;
+  const address=location.href;
+  const relevant=records=>records.some(r=>r.type!=='attributes' || !['class','style'].includes(r.attributeName));
+  const observer=new MutationObserver(records=>{if(relevant(records)) valid=false;});
+  roots.forEach(e=>observer.observe(e,{subtree:true,childList:true,characterData:true,attributes:true}));
+  const input=event=>{
+    const target=event.target instanceof Element ? event.target : event.target?.parentElement;
+    const send=target?.closest('button,a,[role="button"],.send-message');
+    if(editor.contains(target) || (checking && control.contains(target)) ||
+       (send && scope.contains(send) && norm(send)==='发送')) return;
+    valid=false;
+  };
+  document.addEventListener('pointerdown',input,true);
+  document.addEventListener('keydown',input,true);
+  const binding={
+    token:options.token,
+    check() {
+      if(relevant(observer.takeRecords())) valid=false;
+      return valid && location.href===address && scope.isConnected && editor.isConnected &&
+        control.isConnected && scope.contains(editor) && scope.contains(control) &&
+        roots.every(e=>e.isConnected && scope.contains(e));
+    },
+    confirm() {checking=false;return this.check();},
+    dispose() {
+      observer.disconnect();document.removeEventListener('pointerdown',input,true);
+      document.removeEventListener('keydown',input,true);
+    }
+  };
+  Object.defineProperty(editor,key,{value:binding,configurable:true});
+  return binding.check();
 }"""
 
 
@@ -226,6 +283,7 @@ class BossAdapter:
         self.live_urls: dict[str, str] = {}
         self.security_errors: dict[Page, str] = {}
         self.navigation_times: dict[Page, float] = {}
+        self.chat_bindings: dict[Page, tuple[str, str, str]] = {}
         self.watch_page(self.page)
 
     def watch_page(self, page: Page):
@@ -578,6 +636,7 @@ class BossAdapter:
             self.session.owned_pages.append(self.detail)
             self.detail.on("popup", self.register_popup)
         self.detail_popups = []
+        self.chat_bindings.clear()
         # Follow a link observed in the result card; use its temporary parameters only in memory.
         raw_url = self.live_urls.get(job.job_id, job.url)
         canonical_job_url(raw_url)
@@ -753,6 +812,7 @@ class BossAdapter:
             raise LayoutChanged("网站消息入口发生变化")
         chat = await self.session.context.new_page()
         self.session.owned_pages.append(chat)
+        self.detail_popups.append(chat)
         self.watch_page(chat)
         chat.on("popup", self.register_popup)
         await chat.goto(address, wait_until="domcontentloaded")
@@ -881,6 +941,11 @@ class BossAdapter:
         editor = await self.unique_visible(
             page.locator(self.selectors["chat_editor"]), "聊天输入框"
         )
+        if page in self.chat_bindings:
+            identity, token, scope_path = self.chat_bindings[page]
+            if identity != job.job_id or not await self.check_chat_binding(editor, token):
+                raise LayoutChanged("已核对的会话发生变化，请重新核对收件人；未继续发送")
+            return editor, page.locator(scope_path)
         scopes = page.locator(self.selectors["chat_scope"]).filter(has=editor)
         valid_scopes = []
         observed_identities = set()
@@ -909,6 +974,14 @@ class BossAdapter:
             raise LayoutChanged("当前会话公司不匹配")
         return editor, scope
 
+    async def check_chat_binding(self, editor: Locator, token: str, *, confirm=False) -> bool:
+        operation = "confirm" if confirm else "check"
+        return await editor.evaluate(
+            "e => {const b=e[Symbol.for('deliverdesk.chatIdentity')];return !!b && b.token==="
+            + json.dumps(token)
+            + f" && b.{operation}();}}"
+        )
+
     async def chat_scope_via_job_popup(self, page: Page, editor: Locator, job: Job) -> Locator:
         """Verify the actual public job link behind the full chat page's '查看职位'."""
         # The live chat's job card is a clickable container, not always an <a href>.
@@ -931,12 +1004,20 @@ class BossAdapter:
         if view_job is None:
             raise LayoutChanged("无法通过当前会话中的职位链接或查看职位入口确认收件人")
         scope_path = await scope.evaluate(CSS_PATH)
-        before = await scope.inner_text()
+        token = secrets.token_hex(16)
+        options = {
+            "token": token,
+            "editor": await editor.evaluate(CSS_PATH),
+            "control": await view_job.evaluate(CSS_PATH),
+            "title": job.title,
+            "company": job.company,
+        }
+        await scope.evaluate(CHAT_BINDING.replace("__OPTIONS__", json.dumps(options)))
         popup = None
+        verified = False
         try:
-            async with page.expect_popup(
-                timeout=self.config.browser.timeout_seconds * 1000
-            ) as opened:
+            expect_popup = getattr(page, "expect_background_popup", page.expect_popup)
+            async with expect_popup(timeout=self.config.browser.timeout_seconds * 1000) as opened:
                 await view_job.click()
             popup = await opened.value
             self.register_popup(popup)
@@ -949,15 +1030,18 @@ class BossAdapter:
             body = await popup.locator("body").inner_text()
             if job.title not in body or job.company not in body:
                 raise LayoutChanged("聊天页打开的职位详情与目标公司/职位不一致")
+            verified = True
         finally:
             if popup and not popup.is_closed():
                 await popup.close()
             if not page.is_closed():
                 await page.bring_to_front()
-        scope = page.locator(scope_path)
-        if await scope.inner_text() != before:
-            raise LayoutChanged("核对职位期间会话内容发生变化，请重新核对；未继续发送")
-        return scope
+            if not verified and not page.is_closed():
+                await editor.evaluate("e => e[Symbol.for('deliverdesk.chatIdentity')]?.dispose()")
+        if not await self.check_chat_binding(editor, token, confirm=True):
+            raise LayoutChanged("核对职位期间收件人发生变化，请重新核对；未继续发送")
+        self.chat_bindings[page] = (job.job_id, token, scope_path)
+        return page.locator(scope_path)
 
     async def diagnostics(self) -> dict:
         page = self.detail if self.detail and not self.detail.is_closed() else self.page

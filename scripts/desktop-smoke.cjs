@@ -36,6 +36,7 @@ app
       }),
     );
     const requests = [];
+    const verificationPopups = [];
     let fixtureJob = "abc123";
     let fixtureJobs = [fixtureJob];
     host = new BaseWindow({
@@ -56,11 +57,23 @@ app
         shellView.webContents.close({ waitForBeforeUnload: false });
     });
     await shellView.webContents.loadURL("about:blank");
-    browser = new BrowserManager(temp, (data) => backend?.send(data), {
-      partition: "desktop-smoke",
-      host,
-      shellView,
-    });
+    browser = new BrowserManager(
+      temp,
+      (data) => {
+        if (data.event === "popup")
+          verificationPopups.push({
+            page: data.page,
+            parent: data.parent,
+            active: browser.lastId,
+          });
+        backend?.send(data);
+      },
+      {
+        partition: "desktop-smoke",
+        host,
+        shellView,
+      },
+    );
     browser.setViewport({
       visible: true,
       bounds: { x: 220, y: 220, width: 1100, height: 640 },
@@ -74,15 +87,7 @@ app
         /<li class="new-card">[\s\S]*?<\/li>\n/,
       )[0];
       let html = route.includes("/chat")
-        ? fixtures.CHAT_HTML.replace(
-            "message-item is-self",
-            "message-item item-myself",
-          )
-            .replace("text.className='text'", "text.className='text-content'")
-            .replace(
-              '<a href="/job_detail/abc123.html">AI应用工程师</a>',
-              "<span>AI应用工程师</span><button onclick=\"window.open('/job_detail/abc123.html')\">查看职位</button>",
-            )
+        ? fixtures.FULL_CHAT_HTML
         : route.includes("/job_detail/")
           ? fixtures.DETAIL_HTML.replace(
               "this.textContent='继续沟通'",
@@ -154,7 +159,18 @@ app
     assert.equal(state.run.sent, 1);
     assert.equal(state.attemptsToday, 1);
     assert.ok(requests.some((url) => url.includes("/web/geek/chat")));
-    console.log("PASS: custom message, visible receipt, persistent history");
+    assert.equal(
+      verificationPopups.length,
+      1,
+      "A conversation is checked once, including delayed receipt polls",
+    );
+    assert.ok(
+      verificationPopups.every((popup) => popup.active === popup.parent),
+      "Job verification must keep the chat selected",
+    );
+    console.log(
+      "PASS: partially covered Send button, single background job check, delayed receipt, persistent history",
+    );
     assert.equal(
       BaseWindow.getAllWindows().length,
       1,
@@ -289,6 +305,10 @@ app
     assert.equal(state.run.attempts, 3);
     assert.equal(state.run.target, 3);
     assert.equal(state.run.skipped, 1);
+    assert.equal(verificationPopups.length, 4);
+    assert.ok(
+      verificationPopups.every((popup) => popup.active === popup.parent),
+    );
     assert.equal(state.attemptsToday, 4);
     assert.ok(!state.history.some((row) => row.job_id === "batch004"));
     assert.match(state.run.note, /达到本次目标/);

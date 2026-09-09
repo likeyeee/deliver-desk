@@ -47,6 +47,26 @@ function query(q) {
 }
 """
 
+CLICK_POINT = """
+if(!visible(e) || e.disabled || e.getAttribute('aria-disabled')==='true')
+  throw Error('目标控件不可操作');
+// A fixed toolbar can cover the center while the rest of the button remains
+// usable. Only use a point that actually hits this control inside the viewport.
+for(const rect of e.getClientRects()) {
+  const left=Math.max(0,rect.left), top=Math.max(0,rect.top);
+  const right=Math.min(innerWidth,rect.right), bottom=Math.min(innerHeight,rect.bottom);
+  if(right-left<2 || bottom-top<2) continue;
+  for(const fy of [0.5,0.25,0.75,0.1,0.9]) {
+    for(const fx of [0.5,0.25,0.75,0.1,0.9]) {
+      const x=Math.round(left+(right-left-1)*fx), y=Math.round(top+(bottom-top-1)*fy);
+      const hit=document.elementFromPoint(x,y);
+      if(hit && (hit===e || e.contains(hit))) return {x,y};
+    }
+  }
+}
+throw Error('目标控件被其他内容遮挡');
+"""
+
 
 def text_pattern(value, exact=False):
     if isinstance(value, re.Pattern):
@@ -174,9 +194,7 @@ class RpcLocator:
     async def click(self):
         await self.page.bring_to_front()
         await self.scroll_into_view_if_needed()
-        point = await self._one(
-            "if(!visible(e)||e.disabled)throw Error('目标控件不可操作'); const r=e.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; const top=document.elementFromPoint(x,y); if(!top || !(e===top||e.contains(top)))throw Error('目标控件被其他内容遮挡'); return {x,y};"
-        )
+        point = await self._one(CLICK_POINT)
         await self.page.manager.bridge.request("click", page=self.page.id, **point)
         await asyncio.sleep(0.08)
 
@@ -193,8 +211,9 @@ class RpcLocator:
 
 
 class PopupExpectation:
-    def __init__(self, page, timeout):
+    def __init__(self, page, timeout, background=False):
         self.page, self.timeout = page, timeout / 1000
+        self.background = background
         self.value = asyncio.get_running_loop().create_future()
 
     def receive(self, popup):
@@ -203,6 +222,10 @@ class PopupExpectation:
 
     async def __aenter__(self):
         self.page.on("popup", self.receive)
+        if self.background:
+            await self.page.manager.bridge.request(
+                "backgroundPopup", page=self.page.id, enabled=True
+            )
         return self
 
     async def __aexit__(self, kind, error, tb):
@@ -211,6 +234,10 @@ class PopupExpectation:
                 await asyncio.wait_for(asyncio.shield(self.value), self.timeout)
         finally:
             self.page.handlers["popup"].remove(self.receive)
+            if self.background and not self.page.is_closed():
+                await self.page.manager.bridge.request(
+                    "backgroundPopup", page=self.page.id, enabled=False
+                )
 
 
 class RpcMouse:
@@ -293,6 +320,9 @@ class RpcPage:
 
     def expect_popup(self, timeout=20000):
         return PopupExpectation(self, timeout)
+
+    def expect_background_popup(self, timeout=20000):
+        return PopupExpectation(self, timeout, background=True)
 
     async def bring_to_front(self):
         await self.manager.bridge.request("show", page=self.id)

@@ -77,7 +77,7 @@ async function run() {
         const detail = route.match(/\/job_detail\/([\w-]+)\.html/);
         if (detail) current = detail[1];
         let html = route.includes("/chat")
-          ? fixtures.CHAT_HTML
+          ? fixtures.FULL_CHAT_HTML
           : detail
             ? fixtures.DETAIL_HTML.replace(
                 "this.textContent='继续沟通'",

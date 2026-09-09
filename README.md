@@ -11,8 +11,8 @@
 
 | 系统                  | 安装包                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- |
-| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.0/DeliverDesk-0.3.0-mac-arm64.dmg)   |
-| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.0/DeliverDesk-0.3.0-win-x64.exe) |
+| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.1/DeliverDesk-0.3.1-mac-arm64.dmg)   |
+| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.3.1/DeliverDesk-0.3.1-win-x64.exe) |
 
 安装包自带运行环境。当前为未签名测试版；[安装说明与验证范围](docs/desktop-guide.md)。
 
@@ -58,8 +58,8 @@ docs/           使用、架构、适配与发布记录
 
 ### 2026-09-09
 
+- 修复发送按钮局部遮挡导致消息停在草稿，以及聊天页反复闪回职位页的问题。
 - 浏览器嵌入主窗口，扫码、职位和聊天页面统一显示；开始任务后自动切换。
 - 自定义每轮 1–200 次投递，显示目标进度、每日余额和提前结束原因。
-- 提供三档操作节奏，减少重复加载和等待；修复 Windows 切到日志后投递中断。
 
 [完整发布记录](docs/releases/release-notes.md)

@@ -26,6 +26,7 @@ class BrowserManager {
     this.insets = { left: 220, top: 220, right: 16, bottom: 16 };
     this.errors = new Map();
     this.taskPages = new Set();
+    this.backgroundPopups = new Set();
     this.session = session.fromPartition(this.partition);
     this.session.setPermissionRequestHandler((_, __, callback) =>
       callback(false),
@@ -117,7 +118,7 @@ class BrowserManager {
   register(view, parent) {
     const id = String(this.nextId++);
     this.views.set(id, view);
-    this.lastId = id;
+    if (!parent || !this.backgroundPopups.has(parent)) this.lastId = id;
     this.host.contentView.addChildView(view);
     this.layout();
     const wc = view.webContents;
@@ -177,6 +178,7 @@ class BrowserManager {
         this.host.contentView.removeChildView(view);
       this.views.delete(id);
       this.taskPages.delete(id);
+      this.backgroundPopups.delete(id);
       this.errors.delete(id);
       if (this.lastId === id)
         this.lastId = [...this.views.keys()].at(-1) || null;
@@ -294,6 +296,10 @@ class BrowserManager {
       }
       case "show":
         this.activate(params.page, true);
+        return true;
+      case "backgroundPopup":
+        if (params.enabled) this.backgroundPopups.add(params.page);
+        else this.backgroundPopups.delete(params.page);
         return true;
       case "close":
         wc.close({ waitForBeforeUnload: false });

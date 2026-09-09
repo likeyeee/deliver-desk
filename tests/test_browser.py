@@ -39,6 +39,23 @@ CHAT_HTML = """<!doctype html><html><body>
 <button onclick="const editor=document.getElementById('chat-input'); const item=document.createElement('div');item.className='message-item is-self'; const text=document.createElement('div');text.className='text';text.textContent=editor.textContent;item.append(text); const receipt=document.createElement('span');receipt.textContent='送达';item.append(receipt); document.getElementById('messages').append(item);editor.textContent='';">发送</button>
 </div></body></html>"""
 
+FULL_CHAT_HTML = """<!doctype html><html><body>
+<aside><button id="other-contact">另一位联系人</button></aside>
+<div class="chat-conversation">
+<header><strong>示例招聘者</strong><span>示例科技</span></header>
+<div class="message-content">
+<div class="job-card"><span>AI应用工程师</span><button id="view-job" onclick="window.open('/job_detail/abc123.html')">查看职位</button></div>
+<div class="chat-record" id="messages"></div>
+<div class="message-controls"><div class="editor-container"><div id="chat-input" contenteditable="true" role="textbox"></div></div>
+<button id="send-message" onclick="if(!event.isTrusted)throw Error('native input required');const editor=document.getElementById('chat-input'); const item=document.createElement('div');item.className='message-item item-myself'; const text=document.createElement('div');text.className='text-content';text.textContent=editor.textContent;item.append(text); const receipt=document.createElement('span');receipt.textContent='发送中';item.append(receipt);document.getElementById('messages').append(item);editor.textContent='';setTimeout(()=>receipt.textContent='送达',700);">发送</button>
+</div></div></div>
+<div id="floating-help" aria-label="网页悬浮帮助"></div>
+<style>
+#chat-input{min-height:60px;border:1px solid #aaa}
+#send-message{position:fixed;right:-20px;bottom:12px;width:140px;height:46px}
+#floating-help{position:fixed;right:30px;bottom:5px;width:70px;height:70px;border-radius:50%;background:#ddd;z-index:20}
+</style></body></html>"""
+
 
 async def test_reuses_logged_in_page_without_login_navigation(web):
     navigations = []
@@ -355,6 +372,116 @@ async def test_chat_without_link_verifies_view_job_popup_before_typing(web, job,
         assert await web.page.locator("#chat-input").inner_text() == ""
         assert await web.page.locator("#messages").inner_text() == ""
     assert len(web.session.context.pages) == 1
+
+
+async def test_popup_identity_is_reused_through_delayed_receipt_and_incoming_messages(web, job):
+    await web.page.set_content(
+        FULL_CHAT_HTML.replace("<span>示例科技</span>", "<span>示例科技 | 招聘负责人</span>")
+    )
+    # Playwright's click also requires an exposed button center in this test;
+    # the Electron-specific partial obstruction is tested through RpcLocator.
+    await web.page.locator("#floating-help").evaluate("e => e.remove()")
+    await web.page.locator("#send-message").evaluate("e => e.style.right='0px'")
+    popups = []
+    web.page.on("popup", lambda page: popups.append(page))
+
+    async def incoming(_bounds):
+        await web.page.locator("#messages").evaluate(
+            "e => e.insertAdjacentHTML('beforeend','<p>一条新回复</p>')"
+        )
+
+    web.control.delay = incoming
+    result = await web.send_custom(web.page, job, "仅发送一次并等待回执")
+    assert result.status == "sent"
+    assert await web.has_delivery_receipt(web.page, job, "仅发送一次并等待回执")
+    assert len(popups) == 1
+    assert await web.page.locator(".message-item").count() == 1
+
+
+@pytest.mark.parametrize("change", ["job", "recruiter", "editor", "scope", "contact", "transient"])
+async def test_verified_popup_identity_cannot_survive_a_conversation_switch(web, job, change):
+    await web.page.set_content(FULL_CHAT_HTML)
+    popups = []
+    web.page.on("popup", lambda page: popups.append(page))
+
+    async def switch(_bounds):
+        if change == "job":
+            await web.page.locator("#view-job").evaluate(
+                "e => e.setAttribute('onclick',\"window.open('/job_detail/other.html')\")"
+            )
+        elif change == "recruiter":
+            await web.page.locator("header strong").evaluate("e => e.textContent='另一位招聘者'")
+        elif change == "contact":
+            # A SPA can reuse identical title/company nodes for another recruiter.
+            await web.page.locator("#other-contact").click()
+        elif change == "transient":
+            await web.page.locator("header strong").evaluate(
+                "e => {const text=e.textContent;e.textContent='别的会话';e.textContent=text}"
+            )
+        else:
+            selector = "#chat-input" if change == "editor" else ".chat-conversation"
+            await web.page.locator(selector).evaluate("e => e.replaceWith(e.cloneNode(true))")
+
+    web.control.delay = switch
+    with pytest.raises(LayoutChanged, match="会话发生变化"):
+        await web.send_custom(web.page, job, "不能发送到切换后的会话")
+    assert await web.page.locator(".message-item").count() == 0
+    assert len(popups) == 1
+
+
+async def test_switch_during_popup_verification_is_rejected(web, job):
+    await web.page.set_content(FULL_CHAT_HTML)
+
+    async def changed_detail(route):
+        await web.page.locator("header strong").evaluate("e => e.textContent='另一位招聘者'")
+        await route.fulfill(content_type="text/html; charset=utf-8", body=DETAIL_HTML)
+
+    await web.session.context.route("**/job_detail/**", changed_detail)
+    with pytest.raises(LayoutChanged, match="收件人发生变化"):
+        await web.send_custom(web.page, job, "核对期间不能换人")
+    assert await web.page.locator("#chat-input").inner_text() == ""
+
+
+@pytest.mark.parametrize("obstruction", ["partial", "clipped", "full", "disabled"])
+async def test_native_locator_only_clicks_exposed_enabled_control(web, obstruction):
+    from playwright.async_api import Error as PlaywrightError
+
+    from boss_cli.rpc_browser import RpcPage
+
+    await web.page.set_content(FULL_CHAT_HTML)
+    await web.page.locator("#send-message").evaluate(
+        "e => e.onclick=event=>{if(event.isTrusted)e.dataset.clicked='yes'}"
+    )
+    if obstruction == "full":
+        await web.page.locator("#floating-help").evaluate(
+            "e => e.style='position:fixed;inset:0;z-index:100;border-radius:0;width:auto;height:auto'"
+        )
+    elif obstruction == "disabled":
+        await web.page.locator("#send-message").evaluate(
+            "e => e.setAttribute('aria-disabled','true')"
+        )
+    elif obstruction == "clipped":
+        await web.page.locator("#floating-help").evaluate("e => e.remove()")
+        await web.page.locator("#send-message").evaluate("e => e.style.right='-100px'")
+
+    async def request(method, **params):
+        if method == "evaluate":
+            try:
+                return await web.page.evaluate("() => {" + params["body"] + "}")
+            except PlaywrightError as error:
+                raise LayoutChanged(str(error)) from error
+        if method == "click":
+            await web.page.mouse.click(params["x"], params["y"])
+        return True
+
+    rpc = RpcPage(SimpleNamespace(bridge=SimpleNamespace(request=request)), "test")
+    if obstruction in {"full", "disabled"}:
+        with pytest.raises(LayoutChanged, match="遮挡|不可操作"):
+            await rpc.locator("#send-message").click()
+        assert await web.page.locator("#send-message").get_attribute("data-clicked") is None
+    else:
+        await rpc.locator("#send-message").click()
+        assert await web.page.locator("#send-message").get_attribute("data-clicked") == "yes"
 
 
 async def test_custom_message_wrong_recipient_never_types(web, job):

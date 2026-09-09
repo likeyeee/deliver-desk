@@ -6,7 +6,7 @@ body:
     id: version
     attributes:
       label: 应用版本与系统
-      placeholder: 0.3.0 / macOS arm64 或 Windows x64
+      placeholder: 0.3.1 / macOS arm64 或 Windows x64
     validations:
       required: true
   - type: textarea
