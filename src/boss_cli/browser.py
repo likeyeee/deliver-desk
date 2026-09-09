@@ -799,17 +799,24 @@ class BossAdapter:
             return SendResult("partial", f"沟通已建立，自定义消息未确认：{clean_error(error)}")
 
     async def open_full_chat(self, job: Job) -> Page:
-        link = await self.unique_visible(
-            self.detail.get_by_role("link", name="消息", exact=True), "网站消息入口"
-        )
-        address = urljoin(self.detail.url, await link.get_attribute("href") or "")
-        parts = urlsplit(address)
-        if (
-            parts.scheme != "https"
-            or parts.hostname != "www.zhipin.com"
-            or parts.path != "/web/geek/chat"
-        ):
-            raise LayoutChanged("网站消息入口发生变化")
+        # Unread badges change the accessible name (e.g. "消息 7"). Use the
+        # visible site's actual destination; never click through the composer
+        # overlay or guess a route when that public entry is missing.
+        addresses = set()
+        for link in await self.detail.locator('a[href*="/web/geek/chat"]').all():
+            if not await link.is_visible():
+                continue
+            address = urljoin(self.detail.url, await link.get_attribute("href") or "")
+            parts = urlsplit(address)
+            if (
+                parts.scheme == "https"
+                and parts.netloc == "www.zhipin.com"
+                and parts.path == "/web/geek/chat"
+            ):
+                addresses.add(address)
+        if len(addresses) != 1:
+            raise LayoutChanged("无法确认唯一的网站消息入口，请检查网页是否加载完整")
+        address = addresses.pop()
         chat = await self.session.context.new_page()
         self.session.owned_pages.append(chat)
         self.detail_popups.append(chat)

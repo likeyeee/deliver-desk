@@ -89,10 +89,7 @@ app
       let html = route.includes("/chat")
         ? fixtures.FULL_CHAT_HTML
         : route.includes("/job_detail/")
-          ? fixtures.DETAIL_HTML.replace(
-              "this.textContent='继续沟通'",
-              "location.href='/web/geek/chat'",
-            )
+          ? fixtures.DETAIL_COMPOSER_HTML
           : fixtures.LIST_HTML.replace(
               /<ul class="results">[\s\S]*?<\/ul>\s*<aside>/,
               `<ul class="results">${fixtureJobs.map((id) => card.replaceAll("abc123", id)).join("")}</ul><aside>`,
@@ -169,7 +166,7 @@ app
       "Job verification must keep the chat selected",
     );
     console.log(
-      "PASS: partially covered Send button, single background job check, delayed receipt, persistent history",
+      "PASS: unread-badged message entry, covered composer, single background job check, delayed receipt, persistent history",
     );
     assert.equal(
       BaseWindow.getAllWindows().length,
@@ -182,6 +179,23 @@ app
       ),
     );
     const selectedView = browser.get(browser.lastId);
+    assert.equal(
+      await selectedView.webContents.executeJavaScript(
+        "document.body.dataset.analysisOpened || ''",
+      ),
+      "",
+      "The inline competitor card must not be opened to send a message",
+    );
+    const detailView = [...browser.views.values()].find((view) =>
+      view.webContents.getURL().includes("/job_detail/"),
+    );
+    assert.equal(
+      await detailView.webContents.executeJavaScript(
+        "document.querySelector('textarea').value",
+      ),
+      "",
+      "Continue from the masked composer via the unread-badged message entry",
+    );
     assert.equal(selectedView.getBounds().x, 220);
     browser.setViewport({ visible: false });
     assert.equal(host.contentView.children.at(-1), browser.shellView);

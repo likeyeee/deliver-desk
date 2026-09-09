@@ -32,6 +32,19 @@ DETAIL_HTML = """<!doctype html><html><body>
 <h2 class="boss-name">示例招聘者</h2>
 </body></html>"""
 
+DETAIL_COMPOSER_HTML = """<!doctype html><html><body>
+<nav><a href="/web/geek/chat" aria-label="消息 7">消息<span>7</span></a></nav>
+<div class="name"><h1>AI应用工程师</h1><span class="salary">20-30K·14薪</span></div><a href="/gongsi/company.html">示例科技</a>
+<a id="contact" href="javascript:;" onclick="this.textContent='继续沟通';document.getElementById('composer').hidden=false">立即沟通</a>
+<section><h3>职位描述</h3><div class="job-sec-text">Python 大模型应用开发</div></section>
+<h2 class="boss-name">示例招聘者</h2>
+<div id="composer" hidden><div class="startchat-content"><h2>示例招聘者 示例科技</h2>
+<textarea class="input-area" placeholder="请简短描述您的问题"></textarea>
+<button disabled>发送</button><aside>订阅回复消息 在微信上实时收到他的回复</aside>
+</div></div>
+<style>#composer{position:fixed;inset:0;background:#0008;z-index:100}.startchat-content{margin:10vh 10vw;padding:30px;background:white}textarea{display:block}</style>
+</body></html>"""
+
 CHAT_HTML = """<!doctype html><html><body>
 <div class="chat-window">
 <header><a href="/job_detail/abc123.html">AI应用工程师</a><span>示例科技</span></header>
@@ -45,7 +58,10 @@ FULL_CHAT_HTML = """<!doctype html><html><body>
 <header><strong>示例招聘者</strong><span>示例科技</span></header>
 <div class="message-content">
 <div class="job-card"><span>AI应用工程师</span><button id="view-job" onclick="window.open('/job_detail/abc123.html')">查看职位</button></div>
-<div class="chat-record" id="messages"></div>
+<div class="chat-record" id="messages"><div class="competitor-card">
+<strong>你与该职位竞争者PK情况</strong><p>共若干人投递</p>
+<button id="competitor-analysis" onclick="document.body.dataset.analysisOpened='yes'">查看详细分析</button>
+</div></div>
 <div class="message-controls"><div class="editor-container"><div id="chat-input" contenteditable="true" role="textbox"></div></div>
 <button id="send-message" onclick="if(!event.isTrusted)throw Error('native input required');const editor=document.getElementById('chat-input'); const item=document.createElement('div');item.className='message-item item-myself'; const text=document.createElement('div');text.className='text-content';text.textContent=editor.textContent;item.append(text); const receipt=document.createElement('span');receipt.textContent='发送中';item.append(receipt);document.getElementById('messages').append(item);editor.textContent='';setTimeout(()=>receipt.textContent='送达',700);">发送</button>
 </div></div></div>
@@ -268,16 +284,56 @@ async def test_custom_greet_sends_after_chat_opens_without_default_greeting(web,
     assert await web.detail.locator(".message-item.is-self").count() == 1
 
 
-async def test_detail_composer_continues_in_verified_full_chat(web, job):
+@pytest.mark.parametrize(
+    "entry",
+    [
+        '<a href="/web/geek/chat">消息</a>',
+        '<a href="/web/geek/chat">消息<span>7</span></a>',
+        '<a href="/web/geek/chat" aria-label="消息 99+">消息<span>99+</span></a>',
+        '<a href="https://www.zhipin.com/web/geek/chat?ka=header">消息 <span>7</span></a>',
+    ],
+)
+async def test_detail_composer_continues_in_verified_full_chat(web, job, entry):
     await web.inspect_job(job)
     await web.detail.set_content(
-        DETAIL_HTML.replace("</body>", '<a href="/web/geek/chat">消息</a></body>')
+        DETAIL_COMPOSER_HTML.replace(
+            '<a href="/web/geek/chat" aria-label="消息 7">消息<span>7</span></a>', entry
+        )
     )
+    assert not await web.detail.locator("#composer").is_visible()
     result = await web.greet(job, "完整会话回执验证")
     assert result.status == "sent"
+    assert await web.detail.locator("#composer").is_visible()
+    assert await web.detail.locator("textarea").input_value() == ""
     chats = [page for page in web.session.owned_pages if "/web/geek/chat" in page.url]
     assert len(chats) == 1
     assert await chats[0].locator(".message-item.is-self .text").inner_text() == "完整会话回执验证"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        '<a href="/web/geek/chat" hidden>消息 7</a>',
+        '<a href="https://example.org/web/geek/chat">消息 7</a>',
+        '<a href="https://www.zhipin.com.evil.example/web/geek/chat">消息 7</a>',
+        '<a href="http://www.zhipin.com/web/geek/chat">消息 7</a>',
+        '<a href="/web/geek/chat/archive">消息 7</a>',
+        '<a href="/web/geek/chat?contact=1">消息</a><a href="/web/geek/chat?contact=2">消息 7</a>',
+    ],
+)
+async def test_unconfirmed_message_entry_leaves_composer_untouched(web, job, entry):
+    await web.inspect_job(job)
+    await web.detail.set_content(
+        DETAIL_COMPOSER_HTML.replace(
+            '<a href="/web/geek/chat" aria-label="消息 7">消息<span>7</span></a>', entry
+        )
+    )
+    pages = list(web.session.owned_pages)
+    result = await web.greet(job, "入口未核对，不能发送")
+    assert result.status == "partial"
+    assert "网站消息入口" in result.note
+    assert web.session.owned_pages == pages
+    assert await web.detail.locator("textarea").input_value() == ""
 
 
 @pytest.mark.parametrize("ambiguous", [True, False])

@@ -79,10 +79,7 @@ async function run() {
         let html = route.includes("/chat")
           ? fixtures.FULL_CHAT_HTML
           : detail
-            ? fixtures.DETAIL_HTML.replace(
-                "this.textContent='继续沟通'",
-                "location.href='/web/geek/chat'",
-              )
+            ? fixtures.DETAIL_COMPOSER_HTML
             : fixtures.LIST_HTML.replace(
                 /<ul class="results">[\s\S]*?<\/ul>\s*<aside>/,
                 `<ul class="results">${["ui001", "ui002", "ui003", "ui004"].map((id) => card.replaceAll("abc123", id)).join("")}</ul><aside>`,
