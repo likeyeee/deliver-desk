@@ -35,6 +35,7 @@ npm run test:desktop -- --packaged-backend
 
 ## Pull request
 
+- Git 提交信息、Pull request 标题与正文、发布说明统一使用中文。
 - 一次解决一个明确问题，写清触发条件、结果和验证方法。
 - 行为修复附最小回归测试；界面改动附使用示例数据的截图。
 - 用户可感知的变化合并到 [当天发布记录](docs/releases/release-notes.md)，并更新 README 的最新更新。
