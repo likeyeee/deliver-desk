@@ -278,7 +278,44 @@ class BrowserManager {
       }
       case "click": {
         this.activate(params.page, true);
+        // DOM-ready and isFocused() can precede the new renderer's first frame.
+        // Sending input before it renders can silently drop the click on macOS.
+        let timer;
+        try {
+          await Promise.race([
+            wc.executeJavaScript(
+              "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))",
+            ),
+            new Promise((_, reject) => {
+              timer = setTimeout(
+                () => reject(Error("网页尚未准备好接收点击，请检查浏览器")),
+                2000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (
+          this.lastId !== params.page ||
+          !this.host.isFocused() ||
+          !wc.isFocused()
+        )
+          throw Error("等待点击期间浏览器焦点发生变化，未点击");
         const point = { x: Math.round(params.x), y: Math.round(params.y) };
+        if (params.target) {
+          const unchanged = await wc.executeJavaScript(`(() => {
+            let e=document.elementFromPoint(${point.x},${point.y});
+            while(e) {
+              if(e[Symbol.for('deliverdesk.clickTarget')]===${JSON.stringify(params.target)})
+                return !e.disabled && e.getAttribute('aria-disabled')!=='true';
+              e=e.parentElement;
+            }
+            return false;
+          })()`);
+          if (!unchanged)
+            throw Error("等待点击期间目标控件位置发生变化，未点击");
+        }
         wc.sendInputEvent({ type: "mouseMove", ...point });
         wc.sendInputEvent({
           type: "mouseDown",

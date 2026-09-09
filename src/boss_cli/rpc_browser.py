@@ -60,7 +60,11 @@ for(const rect of e.getClientRects()) {
     for(const fx of [0.5,0.25,0.75,0.1,0.9]) {
       const x=Math.round(left+(right-left-1)*fx), y=Math.round(top+(bottom-top-1)*fy);
       const hit=document.elementFromPoint(x,y);
-      if(hit && (hit===e || e.contains(hit))) return {x,y};
+      if(hit && (hit===e || e.contains(hit))) {
+        const target=crypto.randomUUID();
+        Object.defineProperty(e,Symbol.for('deliverdesk.clickTarget'),{value:target,configurable:true});
+        return {x,y,target};
+      }
     }
   }
 }

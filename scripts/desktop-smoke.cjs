@@ -185,7 +185,8 @@ app
     assert.equal(selectedView.getBounds().x, 220);
     browser.setViewport({ visible: false });
     assert.equal(host.contentView.children.at(-1), browser.shellView);
-    for (const reload of [false, true]) {
+    for (let trial = 0; trial < 12; trial++) {
+      const reload = trial > 0;
       if (reload)
         await browser.command("goto", {
           page: browser.lastId,
@@ -203,6 +204,35 @@ app
         ),
         1,
         `Native input continues behind the workspace, including after navigation (reload=${reload})`,
+      );
+      await selectedView.webContents.executeJavaScript(
+        "document.getElementById('native-probe').remove()",
+      );
+    }
+    for (const change of ["move", "disable"]) {
+      await selectedView.webContents.executeJavaScript(`(() => {
+        window.nativeHiddenClick=0;
+        const probe=document.createElement('button');probe.id='native-probe';
+        probe.style='position:fixed;left:0;top:0;width:60px;height:60px;z-index:9999';
+        probe.onclick=()=>window.nativeHiddenClick++;
+        Object.defineProperty(probe,Symbol.for('deliverdesk.clickTarget'),{value:'guard-probe'});
+        document.body.append(probe);
+        requestAnimationFrame(()=>{${change === "move" ? "probe.style.left='200px'" : "probe.disabled=true"}});
+      })()`);
+      await assert.rejects(
+        browser.command("click", {
+          page: browser.lastId,
+          x: 25,
+          y: 25,
+          target: "guard-probe",
+        }),
+        /目标控件位置发生变化/,
+      );
+      assert.equal(
+        await selectedView.webContents.executeJavaScript(
+          "window.nativeHiddenClick",
+        ),
+        0,
       );
       await selectedView.webContents.executeJavaScript(
         "document.getElementById('native-probe').remove()",
