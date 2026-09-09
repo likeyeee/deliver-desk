@@ -47,13 +47,14 @@ def fixture_worker(directory: str):
     asyncio.run(run_task(cfg, Path(directory), mode="send", factory=FixtureSession))
 
 
-def wait_until(predicate, timeout=10):
+def wait_until(predicate, timeout=10, diagnose=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
             return
         time.sleep(0.05)
-    raise AssertionError("timed out waiting for worker state")
+    details = f": {diagnose()}" if diagnose else ""
+    raise AssertionError(f"timed out waiting for worker state{details}")
 
 
 def test_separate_process_pause_resume_stop_and_persistent_history(tmp_path):
@@ -67,8 +68,26 @@ def test_separate_process_pause_resume_stop_and_persistent_history(tmp_path):
     )
     process.start()
     cli = CliRunner()
+
+    def worker_state():
+        return {
+            "alive": process.is_alive(),
+            "exitcode": process.exitcode,
+            "run": db.latest_run(),
+            "events": db.events(),
+        }
+
+    def first_delivery_ready():
+        run = db.latest_run()
+        terminal = {"failed", "needs_attention", "stopped", "completed"}
+        assert process.is_alive() and not (run and run["status"] in terminal), worker_state()
+        return run and run["sent"] == 1
+
     try:
-        wait_until(lambda: db.latest_run() and db.latest_run()["sent"] == 1)
+        # Cold Chrome startup in a spawned Windows process has a separate
+        # budget from the control-response checks below. Worker failures still
+        # fail immediately, with the persisted state and events for diagnosis.
+        wait_until(first_delivery_ready, timeout=30, diagnose=worker_state)
         assert is_active(directory)
         assert cli.invoke(app, ["pause", "-c", str(config_path)]).exit_code == 0
         wait_until(lambda: db.latest_run()["status"] == "paused")
