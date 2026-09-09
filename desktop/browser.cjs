@@ -19,6 +19,7 @@ class BrowserManager {
     this.dataDir = dataDir;
     this.emit = emit;
     this.views = new Map();
+    this.fits = new Map();
     this.nextId = 1;
     this.partition = options.partition || "persist:boss";
     this.host = null;
@@ -78,6 +79,7 @@ class BrowserManager {
     };
     for (const [id, view] of this.views) {
       view.setBounds(bounds);
+      if (id === this.lastId) this.fitToWidth(id);
       // Keep the active native renderer mapped behind the app when the user reads
       // logs. Unmapping it prevents native input from reaching newly opened pages.
       view.setVisible(
@@ -105,6 +107,92 @@ class BrowserManager {
     }
     return id;
   }
+  fitToWidth(id, reset = false) {
+    const view = this.views.get(id),
+      state = this.fits.get(id);
+    if (!view || !state || view.webContents.isDestroyed())
+      return Promise.resolve();
+    if (reset) {
+      state.minimumWidth = 0;
+      state.revision++;
+    }
+    const wc = view.webContents;
+    // Electron queues script execution until the main frame finishes loading.
+    // Wait for did-stop-loading instead of accumulating sizing scripts on blank
+    // or navigating tabs; hidden tabs are measured when they become active.
+    if (
+      !wc.getURL() ||
+      wc.getURL() === "about:blank" ||
+      wc.isLoadingMainFrame()
+    )
+      return state.pending || Promise.resolve();
+    state.dirty = true;
+    if (state.pending) return state.pending;
+    state.pending = (async () => {
+      // Cache only observed horizontal overflow, not the enlarged CSS viewport
+      // at a reduced zoom. This lets a wider window return to normal text size.
+      for (let pass = 0; state.dirty && pass < 4; pass++) {
+        state.dirty = false;
+        const width = view.getBounds().width,
+          revision = state.revision;
+        if (width <= 0) break;
+        const factor = Math.max(
+          0.25,
+          Math.min(
+            1,
+            Math.floor((1000 * width) / (state.minimumWidth || width)) / 1000,
+          ),
+        );
+        if (Math.abs(wc.getZoomFactor() - factor) > 0.0001)
+          wc.setZoomFactor(factor);
+        let timer;
+        let size;
+        try {
+          size = await Promise.race([
+            wc.executeJavaScript(`new Promise(resolve => {
+          let timer;
+          const read = () => {
+            clearTimeout(timer);
+            const root = document.documentElement;
+            resolve(root ? { viewport: root.clientWidth,
+              width: Math.max(root.scrollWidth, document.body?.scrollWidth || 0),
+              gutter: innerWidth - root.clientWidth } : null);
+          };
+          timer = setTimeout(read, 150);
+          requestAnimationFrame(() => requestAnimationFrame(read));
+        })`),
+            // A replaced or covered renderer can leave an in-flight JS promise
+            // unresolved. Sizing must never hold up the task's next operation.
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve(null), 500);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (revision !== state.revision || width !== view.getBounds().width) {
+          state.dirty = true;
+          continue;
+        }
+        if (size && size.width > size.viewport + 1) {
+          const minimum = size.width + size.gutter + 1;
+          if (minimum > state.minimumWidth) {
+            state.minimumWidth = minimum;
+            state.dirty = true;
+          }
+        }
+      }
+    })()
+      .catch(() => {
+        // Navigation/destruction can invalidate a measurement. The next DOM or
+        // resize event measures again; native clicks still recheck their target.
+      })
+      .finally(() => {
+        state.pending = null;
+        if (state.dirty && this.views.has(id)) this.fitToWidth(id);
+      });
+    return state.pending;
+  }
   preferences() {
     return {
       partition: this.partition,
@@ -118,18 +206,32 @@ class BrowserManager {
   register(view, parent) {
     const id = String(this.nextId++);
     this.views.set(id, view);
+    this.fits.set(id, {
+      minimumWidth: 0,
+      revision: 0,
+      dirty: false,
+      pending: null,
+    });
+    view.webContents.setZoomMode("isolated");
     if (!parent || !this.backgroundPopups.has(parent)) this.lastId = id;
     this.host.contentView.addChildView(view);
     this.layout();
     const wc = view.webContents;
     // A navigation can replace the renderer while this view is covered. Apply
     // the background policy to the new renderer so native input remains usable.
-    wc.on("dom-ready", () => wc.setBackgroundThrottling(false));
+    wc.on("dom-ready", () => {
+      wc.setBackgroundThrottling(false);
+      this.fitToWidth(id, true);
+    });
+    wc.on("did-stop-loading", () => this.fitToWidth(id));
     const navigation = (url) =>
       this.emit({ kind: "browserEvent", event: "navigation", page: id, url });
     wc.on("did-navigate", (_, url) => navigation(url));
     wc.on("did-navigate-in-page", (_, url, main) => {
-      if (main) navigation(url);
+      if (main) {
+        navigation(url);
+        this.fitToWidth(id, true);
+      }
     });
     wc.on("will-navigate", (event, url) => {
       if (url !== "about:blank" && !allowedURL(url)) event.preventDefault();
@@ -177,6 +279,7 @@ class BrowserManager {
       if (this.host && !this.host.isDestroyed())
         this.host.contentView.removeChildView(view);
       this.views.delete(id);
+      this.fits.delete(id);
       this.taskPages.delete(id);
       this.backgroundPopups.delete(id);
       this.errors.delete(id);
@@ -265,9 +368,11 @@ class BrowserManager {
           wc.once("destroyed", closed);
           wc.loadURL(params.url).catch(done);
         });
+        await this.fitToWidth(params.page);
         return { url: wc.getURL() };
       }
       case "evaluate": {
+        await this.fits.get(params.page)?.pending;
         // Source arrives only from our packaged Python adapter, never from remote content or UI IPC.
         const result = await wc.executeJavaScript(
           `(() => { try { const value = (() => {${params.body}\n})(); return {ok:true,value:value===undefined?null:value}; } catch(e) { return {ok:false,error:String(e.message)}; } })()`,
@@ -278,6 +383,7 @@ class BrowserManager {
       }
       case "click": {
         this.activate(params.page, true);
+        await this.fits.get(params.page)?.pending;
         // DOM-ready and isFocused() can precede the new renderer's first frame.
         // Sending input before it renders can silently drop the click on macOS.
         let timer;
@@ -302,10 +408,10 @@ class BrowserManager {
           !wc.isFocused()
         )
           throw Error("等待点击期间浏览器焦点发生变化，未点击");
-        const point = { x: Math.round(params.x), y: Math.round(params.y) };
+        const cssPoint = { x: Math.round(params.x), y: Math.round(params.y) };
         if (params.target) {
           const unchanged = await wc.executeJavaScript(`(() => {
-            let e=document.elementFromPoint(${point.x},${point.y});
+            let e=document.elementFromPoint(${cssPoint.x},${cssPoint.y});
             while(e) {
               if(e[Symbol.for('deliverdesk.clickTarget')]===${JSON.stringify(params.target)})
                 return !e.disabled && e.getAttribute('aria-disabled')!=='true';
@@ -316,6 +422,13 @@ class BrowserManager {
           if (!unchanged)
             throw Error("等待点击期间目标控件位置发生变化，未点击");
         }
+        // Adapter rectangles use CSS pixels; native input uses view pixels.
+        // Use the current page zoom after the final hit test, without a DPR multiplier.
+        const zoom = wc.getZoomFactor();
+        const point = {
+          x: Math.round(cssPoint.x * zoom),
+          y: Math.round(cssPoint.y * zoom),
+        };
         wc.sendInputEvent({ type: "mouseMove", ...point });
         wc.sendInputEvent({
           type: "mouseDown",
@@ -333,6 +446,7 @@ class BrowserManager {
       }
       case "show":
         this.activate(params.page, true);
+        await this.fitToWidth(params.page);
         return true;
       case "backgroundPopup":
         if (params.enabled) this.backgroundPopups.add(params.page);

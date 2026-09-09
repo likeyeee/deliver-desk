@@ -248,7 +248,9 @@ function App() {
     .replaceAll("{city}", draft?.search.city || "目标城市")
     .replaceAll("{recruiter}", "招聘负责人");
   return (
-    <div className="app-shell">
+    <div
+      className={"app-shell" + (page === "browser" ? " browser-expanded" : "")}
+    >
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
@@ -341,6 +343,7 @@ function App() {
                   obscured={!!confirm || !!selected}
                   action={action}
                   onWorkspace={() => setPage("workspace")}
+                  onLogs={() => setPage("logs")}
                 />
               )}
               {page === "workspace" && (

@@ -86,9 +86,19 @@ async function run() {
               );
         if (route.includes("/chat") || detail)
           html = html.replaceAll("abc123", current);
+        if (route.includes("/chat"))
+          html = html
+            .replace(
+              '<aside><button id="other-contact">另一位联系人</button></aside>',
+              fixtures.CONTACT_LIST_HTML,
+            )
+            .replace(
+              'class="chat-conversation"',
+              'class="chat-conversation" hidden',
+            );
         html = html.replace(
           "</body>",
-          "<style>body{font:14px/24px sans-serif;padding:28px}#chat-input{border:1px solid #aaa;min-height:60px;width:420px}button{padding:12px}a{display:inline-block}</style></body>",
+          "<style>html{min-width:1280px}body{font:14px/24px sans-serif;padding:28px}#chat-input{border:1px solid #aaa;min-height:60px;width:420px}button{padding:12px}a{display:inline-block}</style></body>",
         );
         return new Response(html, {
           headers: { "content-type": "text/html;charset=utf-8" },
@@ -128,10 +138,14 @@ async function run() {
   console.log(
     "PASS: real app opens login inside its only window and detects completed login",
   );
-  for (const width of [1120, 1360]) {
+  for (const width of [1080, 1360, 1580, 1080]) {
+    let resizeState;
     await desktop.evaluate(
       ({ BaseWindow }, width) =>
-        BaseWindow.getAllWindows()[0].setContentSize(width, 880),
+        BaseWindow.getAllWindows()[0].setContentSize(
+          width,
+          width === 1080 ? 734 : 880,
+        ),
       width,
     );
     await until(async () => {
@@ -139,12 +153,34 @@ async function run() {
       const bounds = await desktop.evaluate(({ BaseWindow }) =>
         BaseWindow.getAllWindows()[0].contentView.children.at(-1).getBounds(),
       );
+      const website = await desktop.evaluate(async ({ BaseWindow }) => {
+        const host = BaseWindow.getAllWindows()[0];
+        const view = host.contentView.children.at(-1);
+        const size = await view.webContents.executeJavaScript(
+          "({ content: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth })",
+        );
+        return {
+          ...size,
+          bounds: view.getBounds(),
+          host: host.getContentSize(),
+          loading: view.webContents.isLoadingMainFrame(),
+          zoom: view.webContents.getZoomFactor(),
+        };
+      });
+      resizeState = { requested: width, slot, bounds, website };
       return (
         slot &&
+        website.content <= website.viewport + 1 &&
+        website.bounds.width === website.host[0] &&
+        Math.abs(slot.y + slot.height - website.host[1]) <= 1 &&
+        slot.x === 0 &&
+        slot.y <= 185 &&
         ["x", "y", "width", "height"].every(
           (key) => Math.abs(Math.round(slot[key]) - bounds[key]) <= 1,
         )
       );
+    }).catch((error) => {
+      throw Error(`${error.message}: ${JSON.stringify(resizeState)}`);
     });
   }
   await page.getByRole("button", { name: "返回工作台", exact: true }).click();
@@ -202,6 +238,55 @@ async function run() {
   const output = path.join(root, "artifacts");
   await fs.mkdir(output, { recursive: true });
   await page.screenshot({ path: path.join(output, "desktop-browser-ui.png") });
+  // Capture the native website as well as the shell: renderer-only screenshots
+  // cannot show a sibling WebContentsView and previously left the browser blank.
+  const browserImage = await desktop.evaluate(
+    async ({ BaseWindow, nativeImage }) => {
+      const host = BaseWindow.getAllWindows()[0];
+      const shell = host.contentView.children.find((view) =>
+        view.webContents.getURL().startsWith("file:"),
+      );
+      const site = host.contentView.children.at(-1);
+      const shellImage = await shell.webContents.capturePage();
+      const siteImage = await site.webContents.capturePage();
+      const size = shellImage.getSize(1),
+        bounds = site.getBounds(),
+        siteSize = siteImage.getSize(1);
+      const [hostWidth, hostHeight] = host.getContentSize();
+      const offset = {
+        x: Math.round((bounds.x * size.width) / hostWidth),
+        y: Math.round((bounds.y * size.height) / hostHeight),
+      };
+      const composite = shellImage.toBitmap({ scaleFactor: 1 });
+      const pixels = siteImage.toBitmap({ scaleFactor: 1 });
+      if (
+        composite.length !== size.width * size.height * 4 ||
+        pixels.length !== siteSize.width * siteSize.height * 4
+      )
+        throw Error("Unexpected screenshot pixel dimensions");
+      for (
+        let row = 0;
+        row < Math.min(siteSize.height, size.height - offset.y);
+        row++
+      ) {
+        const start = row * siteSize.width * 4;
+        pixels.copy(
+          composite,
+          ((row + offset.y) * size.width + offset.x) * 4,
+          start,
+          start + Math.min(siteSize.width, size.width - offset.x) * 4,
+        );
+      }
+      return nativeImage
+        .createFromBitmap(composite, { ...size, scaleFactor: 1 })
+        .toPNG()
+        .toString("base64");
+    },
+  );
+  await fs.writeFile(
+    path.join(output, "desktop-browser-ui.png"),
+    Buffer.from(browserImage, "base64"),
+  );
   await page.getByRole("button", { name: "返回工作台", exact: true }).click();
   await page.screenshot({
     path: path.join(output, "desktop-workspace-ui.png"),
@@ -216,7 +301,8 @@ async function run() {
         externalNetwork: false,
         batchSends: 3,
         windowCount: 1,
-        resizeWidths: [1120, 1360],
+        resizeWidths: [1080, 1360, 1580, 1080],
+        pageFitsWidth: true,
       },
       null,
       2,

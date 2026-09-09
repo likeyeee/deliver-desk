@@ -20,6 +20,7 @@ export default function BrowserPanel({
   obscured,
   action,
   onWorkspace,
+  onLogs,
 }) {
   const viewport = useRef(null);
   const browser = state.browser;
@@ -125,6 +126,9 @@ export default function BrowserPanel({
               </button>
             </>
           )}
+          <button className="btn" onClick={onLogs}>
+            运行日志
+          </button>
           <button className="btn" onClick={onWorkspace}>
             返回工作台
           </button>

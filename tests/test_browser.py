@@ -72,6 +72,11 @@ FULL_CHAT_HTML = """<!doctype html><html><body>
 #floating-help{position:fixed;right:30px;bottom:5px;width:70px;height:70px;border-radius:50%;background:#ddd;z-index:20}
 </style></body></html>"""
 
+CONTACT_LIST_HTML = """<aside id="contacts">
+<button id="other-recruiter" onclick="document.body.dataset.selectedContact='other';document.querySelector('.chat-conversation').hidden=false;document.getElementById('view-job').onclick=()=>window.open('/job_detail/other999.html')"><strong>另一位招聘者</strong><span>示例科技</span><p>示例招聘者</p></button>
+<button id="expected-recruiter" onclick="document.body.dataset.selectedContact='expected';document.querySelector('.chat-conversation').hidden=false"><strong>示例招聘者</strong><span>示例科技</span><p>新的沟通</p></button>
+</aside>"""
+
 
 async def test_reuses_logged_in_page_without_login_navigation(web):
     navigations = []
@@ -336,22 +341,60 @@ async def test_unconfirmed_message_entry_leaves_composer_untouched(web, job, ent
     assert await web.detail.locator("textarea").input_value() == ""
 
 
-@pytest.mark.parametrize("ambiguous", [True, False])
-async def test_full_chat_cannot_send_to_ambiguous_company_or_wrong_job(web, job, ambiguous):
+@pytest.mark.parametrize("case", ["distinct", "reversed", "selected", "same_name", "wrong_job"])
+async def test_full_chat_matches_recruiter_and_still_checks_job(web, job, case):
     await web.inspect_job(job)
-    await web.detail.set_content(
-        DETAIL_HTML.replace("</body>", '<a href="/web/geek/chat">消息</a></body>')
-    )
-    html = (
-        CHAT_HTML.replace("</header>", "<span>示例科技</span></header>")
-        if ambiguous
-        else CHAT_HTML.replace("abc123.html", "other999.html")
-    )
+    job.recruiter = "示例招聘者\n在线"
+    await web.detail.set_content(DETAIL_COMPOSER_HTML)
+    contacts = CONTACT_LIST_HTML
+    if case == "same_name":
+        contacts = contacts.replace("另一位招聘者", "示例招聘者")
+    html = FULL_CHAT_HTML.replace(
+        '<aside><button id="other-contact">另一位联系人</button></aside>', contacts
+    ).replace('class="chat-conversation"', 'class="chat-conversation" hidden')
+    # Contact identity is shared by both adapters. Native partially-covered input
+    # has its own Electron regression; Playwright requires an unobstructed center.
+    html = html.replace("</style>", "#floating-help{display:none}#send-message{right:12px}</style>")
+    if case == "reversed":
+        html = html.replace(
+            "</body>",
+            "<script>const list=document.getElementById('contacts');"
+            "list.prepend(list.lastElementChild);</script></body>",
+        )
+    if case == "selected":
+        html = html.replace('class="chat-conversation" hidden', 'class="chat-conversation"')
+    if case == "wrong_job":
+        html = html.replace("abc123.html", "wrong999.html")
 
     async def other_chat(route):
         await route.fulfill(content_type="text/html; charset=utf-8", body=html)
 
     await web.session.context.route("**/web/geek/chat", other_chat)
+    result = await web.greet(job, "同公司目标招聘者的消息")
+    chat = next(page for page in web.session.owned_pages if "/web/geek/chat" in page.url)
+    delivered = case in {"distinct", "reversed", "selected"}
+    assert result.status == ("sent" if delivered else "partial"), result.note
+    assert await chat.locator(".message-item").count() == int(delivered)
+    assert await chat.locator("#chat-input").inner_text() == ""
+    assert await chat.locator("body").get_attribute("data-selected-contact") == (
+        None if case in {"selected", "same_name"} else "expected"
+    )
+    if case == "same_name":
+        assert "同名招聘者" in result.note
+    if case == "wrong_job":
+        assert "其他职位" in result.note
+
+
+async def test_full_chat_rejects_wrong_direct_job_link(web, job):
+    await web.inspect_job(job)
+    await web.detail.set_content(DETAIL_COMPOSER_HTML)
+    await web.session.context.route(
+        "**/web/geek/chat",
+        lambda route: route.fulfill(
+            content_type="text/html; charset=utf-8",
+            body=CHAT_HTML.replace("abc123.html", "other999.html"),
+        ),
+    )
     result = await web.greet(job, "不能发给其他职位")
     assert result.status == "partial"
     chat = next(page for page in web.session.owned_pages if "/web/geek/chat" in page.url)

@@ -96,9 +96,19 @@ app
             );
       if (route.includes("/chat") || detailId)
         html = html.replaceAll("abc123", fixtureJob);
+      if (route.includes("/chat"))
+        html = html
+          .replace(
+            '<aside><button id="other-contact">另一位联系人</button></aside>',
+            fixtures.CONTACT_LIST_HTML,
+          )
+          .replace(
+            'class="chat-conversation"',
+            'class="chat-conversation" hidden',
+          );
       html = html.replace(
         "</body>",
-        "<style>body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
+        "<style>html{min-width:1280px}body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
       );
       return new Response(html, {
         headers: { "content-type": "text/html;charset=utf-8" },
@@ -181,6 +191,13 @@ app
     const selectedView = browser.get(browser.lastId);
     assert.equal(
       await selectedView.webContents.executeJavaScript(
+        "document.body.dataset.selectedContact",
+      ),
+      "expected",
+      "Match the target recruiter among different contacts at the same company",
+    );
+    assert.equal(
+      await selectedView.webContents.executeJavaScript(
         "document.body.dataset.analysisOpened || ''",
       ),
       "",
@@ -197,6 +214,61 @@ app
       "Continue from the masked composer via the unread-badged message entry",
     );
     assert.equal(selectedView.getBounds().x, 220);
+    const originalSize = host.getContentSize();
+    await selectedView.webContents.executeJavaScript(`(() => {
+      window.edgeClicks = [];
+      for (const side of ['left', 'right']) {
+        const button = document.createElement('button');
+        button.id = 'edge-' + side;
+        button.style = 'position:fixed;top:0;width:60px;height:60px;z-index:9999;' + side + ':0';
+        button.onclick = event => { if (event.isTrusted) window.edgeClicks.push(side); };
+        Object.defineProperty(button, Symbol.for('deliverdesk.clickTarget'), {value: side});
+        document.body.append(button);
+      }
+    })()`);
+    for (const width of [1080, 1580, 1080]) {
+      host.setContentSize(width, 880);
+      browser.setViewport({
+        visible: true,
+        bounds: { x: 0, y: 160, width, height: 720 },
+      });
+      await browser.fitToWidth(browser.lastId);
+      const geometry = await selectedView.webContents.executeJavaScript(`({
+        content: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth,
+        points: ['left', 'right'].map(side => {
+          const r = document.getElementById('edge-' + side).getBoundingClientRect();
+          return {target: side, x: r.x + r.width / 2, y: r.y + r.height / 2};
+        })})`);
+      assert.ok(
+        geometry.content <= geometry.viewport + 1,
+        JSON.stringify(geometry),
+      );
+      assert.equal(selectedView.webContents.getZoomFactor() < 1, width < 1280);
+      for (const point of geometry.points)
+        await browser.command("click", { page: browser.lastId, ...point });
+    }
+    await until(
+      async () =>
+        (await selectedView.webContents.executeJavaScript(
+          "window.edgeClicks.length",
+        )) === 6,
+    );
+    assert.deepEqual(
+      await selectedView.webContents.executeJavaScript("window.edgeClicks"),
+      ["left", "right", "left", "right", "left", "right"],
+    );
+    await selectedView.webContents.executeJavaScript(
+      "document.querySelectorAll('[id^=edge-]').forEach(e=>e.remove())",
+    );
+    host.setContentSize(...originalSize);
+    browser.setViewport({
+      visible: true,
+      bounds: { x: 220, y: 220, width: 1100, height: 640 },
+    });
+    await browser.fitToWidth(browser.lastId);
+    console.log(
+      "PASS: full page width at 1080/1580, restored zoom, trusted clicks at both scaled edges",
+    );
     browser.setViewport({ visible: false });
     assert.equal(host.contentView.children.at(-1), browser.shellView);
     for (let trial = 0; trial < 12; trial++) {

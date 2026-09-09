@@ -830,10 +830,45 @@ class BossAdapter:
             await self.control.checkpoint()
             await self.gate(chat)
             if not selected:
+                # The site may have already selected this exact job. Verify it
+                # before treating the list entry and chat header as two contacts.
+                try:
+                    await self.chat_target(chat, job)
+                    return chat
+                except LayoutChanged:
+                    pass
                 companies = chat.get_by_text(job.company, exact=True)
                 choices = [item for item in await companies.all() if await item.is_visible()]
+                if len(choices) > 1 and job.recruiter.strip():
+                    name = job.recruiter.splitlines()[0].strip()
+                    options = json.dumps({"company": job.company, "name": name})
+                    matches = []
+                    for item in choices:
+                        if await item.evaluate(
+                            r"""company => {
+                              const {company: text, name} = __OPTIONS__;
+                              const visible = e => !!e.getClientRects().length;
+                              const exact = (e, value) => visible(e) && e.innerText?.trim() === value
+                                && !Array.from(e.children).some(c => c.innerText?.trim() === value);
+                              let row = company.parentElement;
+                              for (let depth = 0; row && depth < 6; depth++, row = row.parentElement) {
+                                if (['BODY', 'HTML'].includes(row.tagName)) break;
+                                const nodes = Array.from(row.querySelectorAll('*'));
+                                // Never borrow a name from another company row or
+                                // from a conversation's message preview/editor.
+                                if (nodes.filter(e => exact(e, text)).length > 1) break;
+                                if (row.querySelector('textarea, [contenteditable="true"]')) break;
+                                if (nodes.some(e => exact(e, name)
+                                  && (e.compareDocumentPosition(company) & Node.DOCUMENT_POSITION_FOLLOWING)))
+                                  return true;
+                              }
+                              return false;
+                            }""".replace("__OPTIONS__", options)
+                        ):
+                            matches.append(item)
+                    choices = matches
                 if len(choices) > 1:
-                    raise LayoutChanged("联系人中有多个同名公司，请人工选择并核对；未发送文字")
+                    raise LayoutChanged("同公司联系人中仍有多个同名招聘者，请人工核对；未发送文字")
                 if len(choices) == 1:
                     # Selecting a conversation is read-only. The subsequent public
                     # job popup must still match the exact job ID before typing.
