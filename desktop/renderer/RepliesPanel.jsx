@@ -54,10 +54,7 @@ export default function RepliesPanel({
   return (
     <>
       <div className="page-heading">
-        <div className="simple-heading">
-          <h1>消息回复</h1>
-          <p>用你的求职人格回复消息，可手动确认，也可开启自动监控。</p>
-        </div>
+        <h1>消息回复</h1>
         <button className="btn" onClick={onSettings}>
           <Sparkles size={16} />
           模型与人格
@@ -65,7 +62,7 @@ export default function RepliesPanel({
       </div>
       {!state.llm?.configured && (
         <div className="notice">
-          <span>先在“模型与人格”中配置 DeepSeek API Key，即可生成回复。</span>
+          <span>请先配置 DeepSeek API Key。</span>
           <button className="text-button" onClick={onSettings}>
             前往配置
           </button>
@@ -84,8 +81,8 @@ export default function RepliesPanel({
               自动回复
             </h2>
             <p>
-              每 {monitor.intervalSeconds || 30}{" "}
-              秒检查会话。招聘方发来消息且你尚未回复时，自动生成并发送。
+              每轮间隔 {monitor.intervalSeconds || 30}{" "}
+              秒，自动回复招聘方的文字消息（含已读未回复）。
             </p>
           </div>
           <button
@@ -118,7 +115,7 @@ export default function RepliesPanel({
           }
           role="status"
         >
-          {monitor.note || "开启后开始检查，退出应用后自动停止。"}
+          {monitor.note || "未开启"}
         </p>
         <div className="auto-reply-stats">
           <span>
@@ -166,7 +163,7 @@ export default function RepliesPanel({
           </small>
         </div>
         <p className="ai-hint">
-          包含已读但未回复的文字消息。使用已保存的模型与人格；遇到其他任务会等待，退出应用后停止。扫描按钮只读取会话。
+          使用已保存的模型与人格；其他任务期间等待，退出后停止。扫描仅读取。
         </p>
       </section>
       <div className="reply-grid">
@@ -208,18 +205,14 @@ export default function RepliesPanel({
               ))}
           </div>
           {!jobs.length && (
-            <p className="ai-hint">
-              扫描网站会话后，已沟通的职位会出现在这里，也会保留投递工具中的沟通记录。
-            </p>
+            <p className="ai-hint">暂无会话，点击“扫描待回复”读取。</p>
           )}
         </section>
         <section className="panel reply-compose">
           <div className="reply-target">
             <div>
-              <h2>{selected?.title || "选择一个会话"}</h2>
-              <p>
-                {selected?.company || "从左侧选择已沟通的职位，读取近期对话。"}
-              </p>
+              <h2>{selected?.title || "选择会话"}</h2>
+              <p>{selected?.company || "从左侧选择后读取对话。"}</p>
             </div>
             <button
               className="btn"
@@ -253,7 +246,7 @@ export default function RepliesPanel({
               </p>
               {pending && (
                 <p className="ai-warning">
-                  这个会话有待核对的回复，请先在下方回复记录中核实。
+                  有待核对的回复，请先在回复记录中核实。
                 </p>
               )}
               <div className="ai-actions">
@@ -281,9 +274,7 @@ export default function RepliesPanel({
                   查看浏览器
                 </button>
               </div>
-              <p className="ai-hint">
-                生成时会将当前系统提示词和近期对话发送给 DeepSeek。
-              </p>
+              <p className="ai-hint">系统提示词和近期对话将发送至 DeepSeek。</p>
             </>
           )}
           {loaded && !reply.context && (
@@ -307,8 +298,7 @@ export default function RepliesPanel({
                   onChange={(event) => setText(event.target.value)}
                 />
                 <small>
-                  {[...text.trim()].length.toLocaleString()} 字 ·
-                  完整正文，发送前可编辑
+                  {[...text.trim()].length.toLocaleString()} 字 · 发送前可编辑
                 </small>
               </label>
               <button
@@ -404,16 +394,13 @@ export default function RepliesPanel({
             </table>
           </div>
         ) : (
-          <p className="ai-hint">
-            生成的草稿、已发送回复和待核对结果会保存在这里。
-          </p>
+          <p className="ai-hint">暂无回复记录</p>
         )}
       </section>
       <section className="panel auto-reply-log" aria-label="回复活动日志">
         <div className="ai-section-title">
           <ScrollText size={19} />
           <h2>回复日志</h2>
-          <small>发现、生成、发送与失败均保存在本机</small>
         </div>
         {state.replyEvents?.length ? (
           <div className="reply-log-list">
@@ -439,9 +426,7 @@ export default function RepliesPanel({
             ))}
           </div>
         ) : (
-          <p className="ai-hint">
-            扫描或生成回复后，会在这里显示完整操作过程。
-          </p>
+          <p className="ai-hint">暂无回复日志</p>
         )}
       </section>
       {confirm && (
@@ -464,9 +449,7 @@ export default function RepliesPanel({
               {confirm.company} · {confirm.title}
             </p>
             <div className="reply-confirm-text">{confirm.message}</div>
-            <p className="ai-hint">
-              发送前会再次核对会话和新消息。只有出现送达或已读回执才会记为成功。
-            </p>
+            <p className="ai-hint">发送前核对会话，收到回执后记录送达。</p>
             <div className="ai-actions">
               <button className="btn" onClick={() => setConfirm(null)}>
                 继续编辑

@@ -11,8 +11,8 @@
 
 | 系统                  | 安装包                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- |
-| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.5.0/DeliverDesk-0.5.0-mac-arm64.dmg)   |
-| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.5.0/DeliverDesk-0.5.0-win-x64.exe) |
+| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.5.1/DeliverDesk-0.5.1-mac-arm64.dmg)   |
+| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.5.1/DeliverDesk-0.5.1-win-x64.exe) |
 
 安装包自带运行环境。当前为未签名测试版；[安装说明与验证范围](docs/desktop-guide.md)。
 
@@ -59,6 +59,7 @@ docs/           使用、架构、适配与发布记录
 
 ### 2026-09-09
 
+- 界面改用功能名称，移除宣传标语、重复说明和页脚，精简操作提示。
 - 消息回复页新增自动回复开关：检查招聘方发来且尚未回复的消息，包含已读会话，并保留发现、生成、发送和失败日志。
 - 扫描会等待消息页与会话资料加载完整，首次打开应用也可直接检查待回复消息。
 - 移除回复的 Token 参数和 1,000 字上限，保留完整正文；模型返回截断内容时停止发送。

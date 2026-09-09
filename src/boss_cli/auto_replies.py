@@ -16,7 +16,7 @@ class AutoReplyWorkflow:
         self.layout_skips = {}
         self.state = {
             "status": "off",
-            "note": "开启后，自动查找招聘方发来且你尚未回复的消息",
+            "note": "未开启",
             "lastScanAt": None,
             "nextScanAt": None,
             "scanned": 0,

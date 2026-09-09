@@ -35,7 +35,7 @@ export default function BrowserPanel({
     event?.kind === "start"
       ? "正在准备浏览器…"
       : event?.kind === "login"
-        ? "正在检查登录，出现二维码时请扫码。"
+        ? "正在检查登录…"
         : event?.message.split("\n")[0];
   const navigate = (actionName) =>
     action(() => window.desk.browserNavigate({ action: actionName }));
@@ -86,8 +86,8 @@ export default function BrowserPanel({
             {hasProgress
               ? `已尝试 ${run.attempts || 0} / ${run.target} 次 · 确认送达 ${run.sent} 次 · 跳过 ${run.skipped} 个`
               : browser.loggedIn
-                ? "登录已保存，可回到工作台设置投递"
-                : "使用 BOSS 直聘 App 扫码登录，登录后自动继续"}
+                ? "已登录"
+                : "使用 BOSS 直聘 App 扫码登录"}
           </span>
           {hasProgress && (
             <progress
@@ -139,9 +139,9 @@ export default function BrowserPanel({
         <span>
           {state.active
             ? run?.status === "paused"
-              ? "后续操作已暂停，点击继续恢复。"
+              ? "点击“继续”恢复。"
               : phase || "准备浏览器…"
-            : run?.note || "扫码登录后，可在工作台预览职位并开始投递。"}
+            : run?.note || "暂无任务"}
         </span>
       </div>
       <div className="browser-tabs" role="tablist" aria-label="浏览器页面">
@@ -228,8 +228,8 @@ export default function BrowserPanel({
         {!tabs.length && (
           <div className="empty">
             <Monitor size={32} />
-            <h3>在这里登录并查看投递过程</h3>
-            <p>点击上方“扫码登录”打开 BOSS 直聘。</p>
+            <h3>暂无网页</h3>
+            <p>点击“扫码登录”打开 BOSS 直聘。</p>
           </div>
         )}
       </div>

@@ -21,10 +21,7 @@ export default function AISettings({
   return (
     <>
       <div className="page-heading">
-        <div className="simple-heading">
-          <h1>模型与人格</h1>
-          <p>让回复符合你的经历、表达习惯和求职目标。</p>
-        </div>
+        <h1>模型与人格</h1>
         <button
           className="btn primary"
           disabled={locked || !dirty}
@@ -68,9 +65,7 @@ export default function AISettings({
               }
               onChange={(event) => setKey(event.target.value)}
             />
-            <small>
-              密钥使用系统加密存储，不会放进导出的配置或发送给招聘方。
-            </small>
+            <small>密钥由系统加密保存，不随配置导出。</small>
           </label>
           <div className="ai-actions">
             <button
@@ -79,7 +74,7 @@ export default function AISettings({
               onClick={run(async () => {
                 await window.desk.llm({ action: "saveKey", key });
                 setKey("");
-                setConnection("密钥已加密保存，可以测试连接。");
+                setConnection("密钥已保存");
               })}
             >
               保存密钥
@@ -114,7 +109,7 @@ export default function AISettings({
                 <option key={model} value={model} />
               ))}
             </datalist>
-            <small>可选择推荐模型，或填写账户支持的模型 ID。</small>
+            <small>选择或填写模型 ID</small>
           </label>
           <button
             className="btn"
@@ -139,7 +134,7 @@ export default function AISettings({
         <section className="panel ai-settings">
           <div className="ai-section-title">
             <Sparkles size={20} />
-            <h2>我的求职人格</h2>
+            <h2>求职人格</h2>
           </div>
           <label className="field">
             <span>系统提示词</span>
@@ -149,11 +144,10 @@ export default function AISettings({
               disabled={locked}
               maxLength={20000}
               onChange={(event) => update("system_prompt", event.target.value)}
-              placeholder="例如：我是一名有三年经验的产品经理，正在寻找 AI 产品岗位。我的表达简洁、真诚……"
+              placeholder="填写个人背景、求职偏好、表达方式和回答边界"
             />
             <small>
-              {config.system_prompt.length.toLocaleString()} / 20,000
-              字。可填写个人背景、求职偏好、语言风格和回答边界。
+              {config.system_prompt.length.toLocaleString()} / 20,000 字
             </small>
           </label>
           <div className="ai-options">
@@ -188,19 +182,15 @@ export default function AISettings({
             </label>
           </div>
           <p className="ai-hint ai-output-policy">
-            不设置输出 Token
-            或回复字数上限。完整生成后才会发送；模型服务上限或网络中断导致的残缺回复会被拦下并记录日志。
+            无应用侧 Token 或字数上限；截断或中断时不发送。
           </p>
           <div className="ai-privacy">
             <ShieldCheck size={18} />
-            <p>
-              手动生成或开启自动回复后，系统提示词、目标职位名称与公司、待回复会话的近期消息会发送到
-              DeepSeek。请只填入你希望用于回复的个人资料。
-            </p>
+            <p>生成回复时，系统提示词、职位和近期对话会发送至 DeepSeek。</p>
           </div>
           <button className="btn primary" onClick={onReplies}>
             <Sparkles size={16} />
-            去生成回复
+            打开消息回复
           </button>
         </section>
       </div>

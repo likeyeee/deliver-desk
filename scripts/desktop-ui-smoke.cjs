@@ -384,7 +384,7 @@ async function run() {
   await page.screenshot({
     path: path.join(output, "desktop-models-ui.png"),
   });
-  await page.getByRole("button", { name: "去生成回复", exact: true }).click();
+  await page.getByRole("button", { name: "打开消息回复", exact: true }).click();
   await page.locator(".reply-contact").first().click();
   await page.getByRole("button", { name: "读取对话", exact: true }).click();
   await until(async () => {

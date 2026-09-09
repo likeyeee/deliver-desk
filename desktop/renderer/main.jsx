@@ -125,7 +125,7 @@ function Empty({ icon: Icon = Search, title, body }) {
         <Icon size={26} />
       </div>
       <h3>{title}</h3>
-      <p>{body}</p>
+      {body && <p>{body}</p>}
     </div>
   );
 }
@@ -296,16 +296,7 @@ function App() {
           ))}
         </nav>
         <div className="side-bottom">
-          <div className="privacy">
-            <ShieldCheck size={17} />
-            <div>
-              <b>数据保存在本机</b>
-              <span>登录与投递历史随时可查</span>
-            </div>
-          </div>
-          <span className="version">
-            桌面版 {state?.version || "—"} <span>Electron</span>
-          </span>
+          <span className="version">v{state?.version || "—"}</span>
         </div>
       </aside>
       <main>
@@ -345,11 +336,7 @@ function App() {
             </div>
           )}
           {!state || !draft ? (
-            <Empty
-              icon={LoaderCircle}
-              title="正在连接本地任务服务"
-              body="首次启动需要片刻，请稍候。"
-            />
+            <Empty icon={LoaderCircle} title="正在加载…" />
           ) : (
             <>
               {page === "browser" && (
@@ -390,11 +377,7 @@ function App() {
               {page === "workspace" && (
                 <>
                   <div className="page-heading">
-                    <div>
-                      <div className="eyebrow">YOUR NEXT OPPORTUNITY</div>
-                      <h1>让下一次机会，更近一步。</h1>
-                      <p>设置求职偏好，预览匹配职位，再开始沟通。</p>
-                    </div>
+                    <h1>任务工作台</h1>
                     <Button
                       icon={Save}
                       disabled={locked || !dirty}
@@ -414,13 +397,16 @@ function App() {
                             ? "任务正在执行"
                             : run
                               ? "最近一次任务"
-                              : "准备好开始了吗？"}{" "}
+                              : "尚未运行"}{" "}
                           {run && <Badge value={run.status} />}
                         </div>
                         <p>
                           {active
                             ? `${labels[run?.mode] || "准备"} · ${state.config.search.keywords.join(" / ")}`
-                            : run?.note || "第一次使用，请先完成浏览器登录。"}
+                            : run?.note ||
+                              (state.browser.loggedIn
+                                ? "选择预览或投递"
+                                : "请先扫码登录")}
                         </p>
                       </div>
                     </div>
@@ -505,10 +491,7 @@ function App() {
                           ))}
                         </div>
                       </div>
-                      <Field
-                        label="操作节奏"
-                        hint="随机停顿；页面就绪即继续，可在下方微调。"
-                      >
+                      <Field label="操作节奏" hint="可在下方调整间隔">
                         <select
                           value={
                             Object.entries(pacePresets).find(([, preset]) =>
@@ -539,7 +522,7 @@ function App() {
                       最多尝试 {draft.run.max_sends} 个新职位 · 浏览上限{" "}
                       {draft.search.max_jobs} 个 · 今日还可尝试{" "}
                       {Math.max(0, draft.run.daily_limit - state.attemptsToday)}{" "}
-                      次。重复和不匹配的职位不占投递次数。
+                      次。重复或不匹配的职位不计次数。
                     </p>
                     {draft.run.max_sends >
                       Math.max(
@@ -547,12 +530,12 @@ function App() {
                         draft.run.daily_limit - state.attemptsToday,
                       ) && (
                       <p className="quota-note">
-                        本次会在今日剩余额度用完时结束，可在“运行节奏”调整每日上限。
+                        今日额度用完后停止，可在“运行节奏”调整上限。
                       </p>
                     )}
                     {draft.search.max_jobs < draft.run.max_sends && (
                       <p className="quota-note">
-                        浏览上限低于投递目标，请提高下方浏览上限以继续寻找候选职位。
+                        浏览上限低于投递目标，请提高浏览上限。
                       </p>
                     )}
                   </section>
@@ -564,7 +547,7 @@ function App() {
                         <CircleHelp size={18} />
                         <span>
                           {run.note}
-                          。打开浏览器处理后，可重新运行；历史记录会阻止重复发送。
+                          。请在浏览器处理后重新运行。
                         </span>
                         <button onClick={action(() => openBrowser())}>
                           查看浏览器 <ArrowRight size={15} />
@@ -595,10 +578,7 @@ function App() {
                         <span>修改后下次运行生效</span>
                       </div>
                       <fieldset disabled={locked}>
-                        <Field
-                          label="职位关键词"
-                          hint="用逗号分隔多个关键词，将依次搜索。"
-                        >
+                        <Field label="职位关键词" hint="多个关键词用逗号分隔">
                           <input
                             value={draft.search.keywords.join("，")}
                             onChange={(e) =>
@@ -722,10 +702,7 @@ function App() {
                             更多匹配条件 <ChevronRight size={14} />
                           </summary>
                           <div className="advanced-body">
-                            <Field
-                              label="职位名至少包含一项"
-                              hint="留空表示不增加本地标题限制。"
-                            >
+                            <Field label="职位名至少包含一项" hint="留空则不限">
                               <input
                                 value={draft.match.title_any.join("，")}
                                 onChange={(e) =>
@@ -810,7 +787,6 @@ function App() {
                           <Send size={18} />
                           <h2>打招呼内容</h2>
                         </div>
-                        <span>自定义模板</span>
                       </div>
                       <fieldset disabled={locked}>
                         <Field label="沟通方式">
@@ -858,12 +834,12 @@ function App() {
                       </fieldset>
                       <div className="message-preview">
                         <span>
-                          <Sparkles size={13} /> 效果预览
+                          <Sparkles size={13} /> 预览
                         </span>
                         <p>
                           {draft.message.mode === "custom"
                             ? template
-                            : "仅点击“立即沟通”，不发送上方模板。平台可能自动生成提示。"}
+                            : "仅建立平台沟通，不发送模板。"}
                         </p>
                       </div>
                     </section>
@@ -998,8 +974,8 @@ function App() {
                       </div>
                     ) : (
                       <Empty
-                        title="先预览，发现合适的职位"
-                        body="配置好求职偏好后，点击“预览职位”。预览不会发起沟通。"
+                        title="暂无职位"
+                        body="点击“预览职位”开始搜索，不会发送消息。"
                       />
                     )}
                   </section>
@@ -1008,10 +984,7 @@ function App() {
               {page === "history" && (
                 <>
                   <div className="page-heading">
-                    <div className="simple-heading">
-                      <h1>每一次沟通，都有记录。</h1>
-                      <p>已发送和待核对的职位会自动跳过，避免重复打扰。</p>
-                    </div>
+                    <h1>投递记录</h1>
                     <Button
                       icon={Download}
                       onClick={action(
@@ -1047,7 +1020,7 @@ function App() {
                           "not_sent",
                         ].map((v) => (
                           <option key={v} value={v}>
-                            {labels[v]} ({v})
+                            {labels[v]}
                           </option>
                         ))}
                       </select>
@@ -1097,9 +1070,8 @@ function App() {
                         title={
                           search || statusFilter
                             ? "没有符合条件的记录"
-                            : "还没有投递记录"
+                            : "暂无投递记录"
                         }
-                        body="发起沟通后，发送内容和回执会保存在这里。"
                       />
                     )}
                   </section>
@@ -1108,12 +1080,9 @@ function App() {
               {page === "logs" && (
                 <>
                   <div className="page-heading">
-                    <div className="simple-heading">
-                      <h1>运行日志</h1>
-                      <p>任务进度自动更新，出现问题时可在这里查看原因。</p>
-                    </div>
+                    <h1>运行日志</h1>
                     <span className="live-label">
-                      <i /> 每秒更新
+                      <i /> 自动更新
                     </span>
                   </div>
                   <section className="panel logs-panel">
@@ -1132,11 +1101,7 @@ function App() {
                           </div>
                         ))
                     ) : (
-                      <Empty
-                        icon={ScrollText}
-                        title="等待第一次运行"
-                        body="登录、搜索、筛选和发送过程会在这里实时显示。"
-                      />
+                      <Empty icon={ScrollText} title="暂无运行日志" />
                     )}
                   </section>
                 </>
@@ -1144,10 +1109,7 @@ function App() {
               {page === "settings" && (
                 <>
                   <div className="page-heading">
-                    <div className="simple-heading">
-                      <h1>让工作台适合你的节奏。</h1>
-                      <p>登录状态与历史只保存在这台设备上。</p>
-                    </div>
+                    <h1>偏好与数据</h1>
                   </div>
                   <section className="panel settings-panel">
                     <div className="setting-row">
@@ -1158,8 +1120,8 @@ function App() {
                         <h3>BOSS 直聘登录</h3>
                         <p>
                           {state.browser.loggedIn
-                            ? "已检测到登录。下次打开应用将复用登录目录。"
-                            : "点击登录，在独立浏览器窗口中扫码或完成验证。"}
+                            ? "已登录"
+                            : "在内置浏览器扫码登录"}
                         </p>
                       </div>
                       <Button disabled={locked} onClick={() => start("login")}>
@@ -1172,7 +1134,7 @@ function App() {
                       </div>
                       <div>
                         <h3>本地数据</h3>
-                        <p>投递历史、运行日志与错误现场均保存在本机。</p>
+                        <p>投递记录、回复与日志</p>
                         <code>{state.directory}</code>
                       </div>
                       <Button onClick={action(() => api.openData())}>
@@ -1185,7 +1147,7 @@ function App() {
                       </div>
                       <div>
                         <h3>配置迁移</h3>
-                        <p>导出的配置不包含账号登录状态或投递历史。</p>
+                        <p>不含登录状态、记录和密钥</p>
                       </div>
                       <Button
                         icon={Upload}
@@ -1215,7 +1177,7 @@ function App() {
                       </div>
                       <div>
                         <h3>浏览器诊断</h3>
-                        <p>检查当前页面结构，并将结果保存到数据目录。</p>
+                        <p>诊断结果保存至数据目录</p>
                       </div>
                       <Button
                         disabled={locked}
@@ -1295,12 +1257,6 @@ function App() {
               )}
             </>
           )}
-          {page !== "browser" && (
-            <footer>
-              <ShieldCheck size={13} /> 以网站实际送达回执为准 ·
-              不确定的发送不会自动重试
-            </footer>
-          )}
         </div>
       </main>
       {confirm && draft && (
@@ -1322,7 +1278,7 @@ function App() {
               <Send size={24} />
             </div>
             <h2 id="confirm-title">确认本次投递范围</h2>
-            <p>启动后，将按以下条件查找职位并向匹配的招聘者发起沟通。</p>
+            <p>将向符合以下条件的招聘方发起沟通。</p>
             <dl>
               <dt>搜索职位</dt>
               <dd>{draft.search.keywords.join(" / ")}</dd>
