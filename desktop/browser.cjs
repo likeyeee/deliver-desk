@@ -330,9 +330,14 @@ class BrowserManager {
   }
   async command(method, params) {
     if (method === "primary") {
-      const id = [...this.views.keys()][0];
+      const retained = this.views.has(params.keep) ? params.keep : this.lastId;
+      const id =
+        params.preferCurrent && this.views.has(retained)
+          ? retained
+          : [...this.views.keys()][0];
       for (const managedId of [...this.taskPages]) {
         if (
+          !params.preferCurrent &&
           managedId !== id &&
           managedId !== params.keep &&
           this.views.has(managedId)

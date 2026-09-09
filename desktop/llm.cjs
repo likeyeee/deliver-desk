@@ -86,7 +86,7 @@ const statusErrors = {
 };
 
 class DeepSeek {
-  constructor(vault, fetcher = (...args) => fetch(...args), timeout = 60000) {
+  constructor(vault, fetcher = (...args) => fetch(...args), timeout = 600000) {
     this.vault = vault;
     this.fetcher = fetcher;
     this.timeout = timeout;
@@ -128,7 +128,7 @@ class DeepSeek {
         const { value, done } = await reader.read();
         if (done) break;
         length += value.byteLength;
-        if (length > 1024 * 1024) {
+        if (length > 16 * 1024 * 1024) {
           await reader.cancel();
           throw Error("DeepSeek 响应过大，请减少上下文后重试");
         }
@@ -178,9 +178,6 @@ class DeepSeek {
       !Number.isFinite(config.temperature) ||
       config.temperature < 0 ||
       config.temperature > 2 ||
-      !Number.isInteger(config.max_tokens) ||
-      config.max_tokens < 128 ||
-      config.max_tokens > 4096 ||
       !Array.isArray(messages) ||
       !messages.length ||
       messages.length > 50 ||
@@ -212,22 +209,29 @@ class DeepSeek {
       ],
       thinking: { type: "disabled" },
       temperature: config.temperature,
-      max_tokens: config.max_tokens,
       stream: false,
     });
     const choice = result.choices?.[0];
     if (choice?.finish_reason !== "stop" || choice.message?.tool_calls?.length)
       throw Error(
-        "DeepSeek 未返回完整回复（可能达到输出上限），请调整配置后重新生成",
+        "DeepSeek 未完整结束回复（可能达到模型服务上限或被中断），全文未发送，请查看日志后重试",
       );
     const content = choice.message?.content;
-    if (
-      typeof content !== "string" ||
-      !content.trim() ||
-      [...content.trim()].length > 1000
-    )
-      throw Error("DeepSeek 回复为空或超过 1000 字，请调整提示词后重新生成");
-    return { message: content.trim() };
+    if (typeof content !== "string" || !content.trim())
+      throw Error("DeepSeek 回复为空，请调整提示词后重新生成");
+    const usage = Object.fromEntries(
+      ["prompt_tokens", "completion_tokens", "total_tokens"]
+        .filter(
+          (key) =>
+            Number.isSafeInteger(result.usage?.[key]) && result.usage[key] >= 0,
+        )
+        .map((key) => [key, result.usage[key]]),
+    );
+    return {
+      message: content.trim(),
+      usage,
+      finishReason: choice.finish_reason,
+    };
   }
 }
 module.exports = { KeyVault, DeepSeek };

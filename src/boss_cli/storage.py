@@ -68,12 +68,28 @@ class Store:
           status TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL, UNIQUE(job_id, context_hash)
         );
+        CREATE TABLE IF NOT EXISTS reply_members (
+          job_id TEXT PRIMARY KEY REFERENCES jobs(job_id), last_seen_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS auto_reply_checks (
+          job_id TEXT NOT NULL REFERENCES jobs(job_id), context_hash TEXT NOT NULL,
+          context TEXT NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          PRIMARY KEY(job_id, context_hash)
+        );
         """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(runs)")}
         for name in ("target", "attempts"):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
-        self.db.execute("PRAGMA user_version=3")
+        reply_columns = {row[1] for row in self.db.execute("PRAGMA table_info(replies)")}
+        for name, definition in (
+            ("source", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("usage", "TEXT NOT NULL DEFAULT '{}'"),
+        ):
+            if name not in reply_columns:
+                self.db.execute(f"ALTER TABLE replies ADD COLUMN {name} {definition}")
+        self.db.execute("PRAGMA user_version=4")
 
     def close(self):
         self.db.close()
@@ -145,6 +161,10 @@ class Store:
             ("上次回复期间退出，请到网站核对；不会自动重发", now()),
         )
         self.db.execute(
+            "UPDATE auto_reply_checks SET status='failed',note=?,updated_at=? WHERE status='generating'",
+            ("上次生成期间退出，未自动发送；重新开启监控后可再次生成", now()),
+        )
+        self.db.execute(
             "UPDATE runs SET status='interrupted',updated_at=?,note=? WHERE status IN ('starting','running','paused','stopping')",
             (now(), "上次进程已退出"),
         )
@@ -155,17 +175,38 @@ class Store:
 
     def reply_job(self, job_id: str) -> Job:
         row = self.db.execute(
-            "SELECT j.data FROM jobs j JOIN deliveries d USING(job_id) WHERE job_id=? AND d.status IN ('sent','contacted','partial','unknown')",
+            """SELECT j.data FROM jobs j LEFT JOIN deliveries d USING(job_id)
+            LEFT JOIN reply_members m USING(job_id) WHERE j.job_id=?
+            AND (d.status IN ('sent','contacted','partial','unknown') OR m.job_id IS NOT NULL)""",
             (job_id,),
         ).fetchone()
         if not row:
-            raise ValueError("请选择投递记录中已经沟通过的职位")
+            raise ValueError("请选择已沟通的职位，或先扫描网站中的会话")
         return Job(**json.loads(row["data"]))
+
+    def mark_reply_contact(self, job: Job):
+        """Discover an existing inbox conversation without inventing a delivery record."""
+        known = self.db.execute("SELECT data FROM jobs WHERE job_id=?", (job.job_id,)).fetchone()
+        data = job.as_dict()
+        if known:
+            previous = json.loads(known["data"])
+            for field in ("location", "salary", "experience", "education", "tags", "description"):
+                if not data[field]:
+                    data[field] = previous.get(field, "")
+        self.save_job(Job(**data))
+        self.db.execute(
+            """INSERT INTO reply_members VALUES(?,?)
+            ON CONFLICT(job_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
+            (job.job_id, now()),
+        )
 
     def reply_contacts(self) -> list[dict]:
         result = []
         for row in self.db.execute(
-            "SELECT j.data,d.updated_at FROM jobs j JOIN deliveries d USING(job_id) WHERE d.status IN ('sent','contacted','partial','unknown') ORDER BY d.updated_at DESC LIMIT 500"
+            """SELECT j.data,COALESCE(m.last_seen_at,d.updated_at) AS updated_at FROM jobs j
+            LEFT JOIN deliveries d USING(job_id) LEFT JOIN reply_members m USING(job_id)
+            WHERE d.status IN ('sent','contacted','partial','unknown') OR m.job_id IS NOT NULL
+            ORDER BY updated_at DESC LIMIT 500"""
         ):
             data = json.loads(row["data"])
             result.append(
@@ -184,7 +225,7 @@ class Store:
         return [
             dict(row)
             for row in self.db.execute(
-                "SELECT r.id,r.job_id,r.model,r.message,r.status,r.note,r.created_at,r.updated_at,j.title,j.company FROM replies r JOIN jobs j USING(job_id) ORDER BY r.rowid DESC LIMIT ?",
+                "SELECT r.id,r.job_id,r.model,r.message,r.status,r.note,r.source,r.usage,r.created_at,r.updated_at,j.title,j.company FROM replies r JOIN jobs j USING(job_id) ORDER BY r.rowid DESC LIMIT ?",
                 (limit,),
             )
         ]
@@ -195,7 +236,19 @@ class Store:
         ).fetchone():
             raise ValueError("这个会话有待核对的回复，请先在回复记录中人工核实")
 
-    def save_reply(self, reply_id: str, job_id: str, context: dict, model: str, message: str):
+    def save_reply(
+        self,
+        reply_id: str,
+        job_id: str,
+        context: dict,
+        model: str,
+        message: str,
+        *,
+        source="manual",
+        usage=None,
+    ):
+        if source not in {"manual", "auto"}:
+            raise ValueError("无效的回复来源")
         self.check_reply_pending(job_id)
         old = self.db.execute(
             "SELECT id,status FROM replies WHERE job_id=? AND context_hash=?",
@@ -206,9 +259,11 @@ class Store:
                 raise ValueError("这段会话已经回复，未重复生成")
             reply_id = old["id"]
         self.db.execute(
-            """INSERT INTO replies VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO replies(id,job_id,run_id,context_hash,context,model,message,
+            status,note,created_at,updated_at,source,usage) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET model=excluded.model,message=excluded.message,
-            context=excluded.context,status='draft',note=excluded.note,updated_at=excluded.updated_at""",
+            context=excluded.context,status='draft',note=excluded.note,updated_at=excluded.updated_at,
+            source=excluded.source,usage=excluded.usage""",
             (
                 reply_id,
                 job_id,
@@ -221,9 +276,55 @@ class Store:
                 "草稿待确认",
                 now(),
                 now(),
+                source,
+                json.dumps(usage or {}),
             ),
         )
         return self.reply(reply_id)
+
+    def auto_reply_check(self, job_id: str, context_hash: str) -> dict | None:
+        row = self.db.execute(
+            "SELECT * FROM auto_reply_checks WHERE job_id=? AND context_hash=?",
+            (job_id, context_hash),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def record_auto_check(self, job_id: str, context: dict, status: str, note: str):
+        if status not in {"pending", "generating", "sent", "skipped", "failed", "superseded"}:
+            raise ValueError("无效的监控状态")
+        self.db.execute(
+            """INSERT INTO auto_reply_checks VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(job_id,context_hash) DO UPDATE SET context=excluded.context,
+            status=excluded.status,note=excluded.note,updated_at=excluded.updated_at""",
+            (
+                job_id,
+                context.get("replyKey", context["fingerprint"]),
+                json.dumps(context, ensure_ascii=False),
+                status,
+                note,
+                now(),
+                now(),
+            ),
+        )
+
+    def reset_auto_failures(self):
+        # A new explicit toggle allows generation failures to be retried, never uncertain sends.
+        self.db.execute(
+            "UPDATE auto_reply_checks SET status='pending',updated_at=? WHERE status='failed'",
+            (now(),),
+        )
+
+    def reply_events(self, limit=100) -> list[dict]:
+        return [
+            dict(row)
+            for row in self.db.execute(
+                """SELECT e.*,j.title,j.company FROM events e
+                LEFT JOIN jobs j USING(job_id)
+                WHERE e.kind LIKE 'reply_%' OR e.kind LIKE 'auto_%'
+                ORDER BY e.id DESC LIMIT ?""",
+                (limit,),
+            )
+        ]
 
     def reserve_reply(self, reply_id: str, run_id: str, message: str, limit: int):
         self.db.execute("BEGIN IMMEDIATE")

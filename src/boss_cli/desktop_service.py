@@ -9,11 +9,13 @@ import os
 import sys
 import threading
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from filelock import Timeout
 
 from . import __version__
+from .auto_replies import AutoReplyWorkflow
 from .browser import LayoutChanged, clean_error
 from .config import Config, dump_config, load_config
 from .control import is_active, task_lock
@@ -37,7 +39,7 @@ class Bridge:
         self.pending[key] = future
         emit({"kind": transport, "id": key, "method": method, "params": params})
         try:
-            return await asyncio.wait_for(future, 75 if transport == "llm" else 40)
+            return await asyncio.wait_for(future, 660 if transport == "llm" else 40)
         except TimeoutError as error:
             raise LayoutChanged(
                 "模型请求超时，请手动重试"
@@ -76,6 +78,19 @@ class DesktopService:
             self.bridge,
             lambda c, d, page: RpcSession(c, d, self.browser, retain_page=page),
         )
+        self.auto_replies = AutoReplyWorkflow(
+            self.store,
+            directory,
+            self.bridge,
+            lambda c, d, page: RpcSession(
+                c, d, self.browser, retain_page=page, prefer_current=True
+            ),
+        )
+        # Enabling a monitor is a session action, never an imported preference or
+        # an unattended restart after a crash. Its audit trail remains in SQLite.
+        self.monitor_enabled = False
+        self.monitor_task = None
+        self.auto_task = None
         self.task = None
         self.run_id = None
         if not config_path.exists():
@@ -108,6 +123,12 @@ class DesktopService:
             "replyState": self.replies.state,
             "replies": self.store.reply_history(),
             "replyContacts": self.store.reply_contacts(),
+            "replyEvents": self.store.reply_events(),
+            "autoReply": {
+                **self.auto_replies.state,
+                "enabled": self.monitor_enabled,
+                "intervalSeconds": self.config.auto_reply.interval_seconds,
+            },
             "directory": str(self.directory),
         }
 
@@ -118,6 +139,41 @@ class DesktopService:
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再修改配置")
             return self.save(params["config"])
+        if method == "autoReply":
+            action = params.get("action")
+            if action == "disable":
+                self.stop_monitor()
+                return self.snapshot()
+            if action == "enable":
+                if self.monitor_enabled:
+                    return self.snapshot()
+                if self.monitor_task and not self.monitor_task.done():
+                    raise ValueError("自动回复正在停止，请稍后再开启")
+                self.auto_replies.prepare()
+                self.monitor_enabled = True
+                self.auto_replies.state.update(
+                    status="waiting", note="自动回复已开启，准备检查会话", nextScanAt=None
+                )
+                self.store.event(None, "INFO", "auto_enabled", "已开启自动回复；应用退出后停止")
+                self.monitor_task = asyncio.create_task(self.monitor())
+                return self.snapshot()
+            if action == "scan":
+                if (
+                    self.monitor_enabled
+                    or is_active(self.directory)
+                    or (self.task and not self.task.done())
+                ):
+                    raise ValueError("请先停止当前操作，再扫描会话")
+                self.auto_replies.layout_skips.clear()
+                self.run_id = uuid.uuid4().hex[:12]
+                self.task = asyncio.create_task(
+                    self.auto_replies.cycle(
+                        self.config.model_copy(deep=True), self.run_id, scan_only=True
+                    )
+                )
+                self.task.add_done_callback(self.finished)
+                return {"runId": self.run_id}
+            raise ValueError("无效的自动回复操作")
         if method == "reply":
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再处理回复")
@@ -167,6 +223,9 @@ class DesktopService:
             if action not in {"pause", "run", "stop"}:
                 raise ValueError("无效的任务操作")
             run = self.store.latest_run()
+            if action == "stop" and self.auto_task and not self.auto_task.done():
+                self.stop_monitor()
+                return self.snapshot()
             if run and is_active(self.directory):
                 self.store.update_run(run["run_id"], control=action)
                 if action == "stop" and run["mode"].startswith("reply_") and self.task:
@@ -185,6 +244,70 @@ class DesktopService:
             return self.store.history(limit=100000)
         raise ValueError("不支持的桌面命令")
 
+    def stop_monitor(self):
+        was_enabled = self.monitor_enabled
+        self.monitor_enabled = False
+        running = bool(self.auto_task and not self.auto_task.done())
+        if self.monitor_task and not self.monitor_task.done():
+            self.monitor_task.cancel()
+        if running:
+            self.auto_task.cancel()
+        self.auto_replies.state.update(
+            status="stopping" if running else "off",
+            nextScanAt=None,
+            note="正在停止后续回复操作…" if running else "自动回复已关闭",
+        )
+        if was_enabled:
+            self.store.event(None, "INFO", "auto_disabled", "已关闭自动回复，停止后续检查和发送")
+
+    async def monitor(self):
+        try:
+            while self.monitor_enabled:
+                if is_active(self.directory) or (self.task and not self.task.done()):
+                    self.auto_replies.state.update(
+                        status="waiting_task",
+                        nextScanAt=None,
+                        note="等待当前投递或手动操作结束后继续检查",
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                self.run_id = uuid.uuid4().hex[:12]
+                self.auto_task = asyncio.create_task(
+                    self.auto_replies.cycle(self.config.model_copy(deep=True), self.run_id)
+                )
+                self.task = self.auto_task
+                self.task.add_done_callback(self.finished)
+                run = await self.auto_task
+                if (
+                    not self.monitor_enabled
+                    or not run
+                    or run["status"] in {"needs_attention", "stopped"}
+                ):
+                    if self.monitor_enabled:
+                        self.store.event(
+                            None,
+                            "WARNING",
+                            "auto_disabled",
+                            "自动回复已停止：" + self.auto_replies.state["note"],
+                        )
+                    break
+                interval = self.config.auto_reply.interval_seconds
+                next_scan = (datetime.now().astimezone() + timedelta(seconds=interval)).isoformat(
+                    timespec="seconds"
+                )
+                self.auto_replies.state.update(status="waiting", nextScanAt=next_scan)
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.monitor_enabled = False
+            if self.auto_task and not self.auto_task.done():
+                self.auto_task.cancel()
+                await asyncio.gather(self.auto_task, return_exceptions=True)
+            self.auto_replies.state["nextScanAt"] = None
+            if self.auto_replies.state["status"] != "needs_attention":
+                self.auto_replies.state.update(status="off", note="自动回复已关闭")
+
     def finished(self, task):
         try:
             emit({"kind": "event", "event": "finished", "result": task.result()})
@@ -192,6 +315,9 @@ class DesktopService:
             emit({"kind": "event", "event": "error", "error": clean_error(error)})
 
     async def shutdown(self):
+        self.stop_monitor()
+        if self.monitor_task:
+            await asyncio.gather(self.monitor_task, return_exceptions=True)
         if self.task and not self.task.done():
             if self.run_id and self.store.run(self.run_id):
                 self.store.update_run(self.run_id, control="stop")

@@ -186,26 +186,15 @@ export default function AISettings({
               />
               <small>最多读取 50 条上下文</small>
             </label>
-            <label className="field">
-              <span>输出 Token 上限</span>
-              <input
-                type="number"
-                min="128"
-                max="4096"
-                step="128"
-                value={config.max_tokens}
-                disabled={locked}
-                onChange={(event) =>
-                  update("max_tokens", Number(event.target.value))
-                }
-              />
-              <small>消息正文最多 1,000 字</small>
-            </label>
           </div>
+          <p className="ai-hint ai-output-policy">
+            不设置输出 Token
+            或回复字数上限。完整生成后才会发送；模型服务上限或网络中断导致的残缺回复会被拦下并记录日志。
+          </p>
           <div className="ai-privacy">
             <ShieldCheck size={18} />
             <p>
-              点击生成回复时，系统提示词、目标职位名称与公司、选中会话的近期消息会发送到
+              手动生成或开启自动回复后，系统提示词、目标职位名称与公司、待回复会话的近期消息会发送到
               DeepSeek。请只填入你希望用于回复的个人资料。
             </p>
           </div>

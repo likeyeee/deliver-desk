@@ -140,12 +140,18 @@ else {
         llm: vault.status(),
       }));
       handle("llm", async ({ action, key }) => {
-        if ((await backend.request("snapshot")).active)
+        const state = await backend.request("snapshot");
+        if (state.active || state.autoReply?.enabled)
           throw Error("请先停止任务，再修改或测试模型配置");
         if (action === "saveKey") return vault.save(key);
         if (action === "removeKey") return vault.remove();
         if (action === "test") return llm.test();
         throw Error("无效的模型配置操作");
+      });
+      handle("autoReply", async (params) => {
+        if (params.action === "enable" && !vault.status().configured)
+          throw Error("请先在模型与人格中保存 DeepSeek API Key");
+        return backend.request("autoReply", params);
       });
       handle("openBrowser", () => browser.showOrOpen());
       handle("browserViewport", (params) => browser.setViewport(params));

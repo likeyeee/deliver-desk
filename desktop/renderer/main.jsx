@@ -80,6 +80,8 @@ const labels = {
   reply_read: "读取会话",
   reply_generate: "生成回复",
   reply_send: "发送回复",
+  reply_auto: "自动回复",
+  reply_scan: "扫描待回复",
 };
 const split = (s) =>
   s
@@ -364,7 +366,7 @@ function App() {
                 <AISettings
                   config={draft.llm}
                   status={state.llm}
-                  locked={locked}
+                  locked={locked || state.autoReply?.enabled}
                   dirty={
                     JSON.stringify(draft.llm) !==
                     JSON.stringify(state.config.llm)

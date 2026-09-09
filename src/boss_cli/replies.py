@@ -3,8 +3,94 @@
 import asyncio
 import uuid
 
-from .browser import BossAdapter, LayoutChanged, clean_error
+from .browser import BossAdapter, ConversationChanged, LayoutChanged, clean_error
 from .control import Controller, StopRequested, task_lock
+
+
+async def generate_reply(
+    store, bridge, adapter, chat, job, context, config, control, run_id, *, source="manual"
+):
+    store.check_reply_pending(job.job_id)
+    if not context["canReply"]:
+        raise ValueError(context["reason"])
+    store.event(run_id, "INFO", "reply_generate", f"开始生成回复 · {config.llm.model}", job.job_id)
+    result = await bridge.request(
+        "generate",
+        transport="llm",
+        config=config.llm.model_dump(),
+        messages=context["messages"],
+        job={"title": job.title, "company": job.company},
+    )
+    await control.checkpoint()
+    current = await adapter.read_conversation(chat, job)
+    if current["fingerprint"] != context["fingerprint"] or not current["canReply"]:
+        raise ConversationChanged("生成期间会话已变化，已丢弃草稿；重新读取后再生成")
+    message = result.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("模型未返回有效的完整回复")
+    record = store.save_reply(
+        uuid.uuid4().hex,
+        job.job_id,
+        context,
+        config.llm.model,
+        message.strip(),
+        source=source,
+        usage=result.get("usage"),
+    )
+    token_note = (
+        f"，输出 {result['usage']['completion_tokens']} Token"
+        if isinstance(result.get("usage"), dict) and "completion_tokens" in result["usage"]
+        else ""
+    )
+    store.event(
+        run_id,
+        "INFO",
+        "reply_generated",
+        f"已完整生成 {len(message.strip())} 字{token_note}；正文和对话已保存在回复记录",
+        job.job_id,
+    )
+    return record
+
+
+async def send_reply(store, adapter, chat, job, record, message, config, control, run_id):
+    reserved = False
+    try:
+        context = await adapter.read_conversation(chat, job)
+        if context["fingerprint"] != record["context_hash"] or not context["canReply"]:
+            raise ConversationChanged("草稿对应的会话已变化，未发送；请重新读取并生成回复")
+        await control.checkpoint()
+        store.reserve_reply(record["id"], run_id, message, config.run.daily_limit)
+        reserved = True
+        store.event(
+            run_id, "INFO", "reply_send", "已登记发送，正在核对目标并提交完整正文", job.job_id
+        )
+        result = await adapter.send_custom(
+            chat, job, message, expected_context=record["context_hash"]
+        )
+        status = "sent" if result.status == "sent" else "unknown"
+        store.finish_reply(record["id"], status, result.note)
+        reserved = False
+        store.event(
+            run_id,
+            "INFO" if status == "sent" else "WARNING",
+            "reply_" + status,
+            result.note,
+            job.job_id,
+        )
+        if status != "sent":
+            raise LayoutChanged(result.note)
+        return result
+    except ConversationChanged as error:
+        if reserved:
+            store.finish_reply(record["id"], "not_sent", str(error))
+            store.event(run_id, "INFO", "reply_superseded", str(error), job.job_id)
+            reserved = False
+        raise
+    finally:
+        if reserved:
+            note = "回复期间中断或异常，请到网站核对；不会自动重发"
+            store.finish_reply(record["id"], "unknown", note)
+            store.event(run_id, "WARNING", "reply_unknown", note, job.job_id)
 
 
 class ReplyWorkflow:
@@ -23,8 +109,8 @@ class ReplyWorkflow:
             if record["status"] != "draft":
                 raise ValueError("这条回复已处理，未重复发送")
             message = params.get("message")
-            if not isinstance(message, str) or not message.strip() or len(message.strip()) > 1000:
-                raise ValueError("回复需为 1–1000 字")
+            if not isinstance(message, str) or not message.strip():
+                raise ValueError("回复正文不能为空")
             return self.store.reply_job(record["job_id"])
         job = self.store.reply_job(params.get("jobId", ""))
         if action == "generate" and (
@@ -34,7 +120,6 @@ class ReplyWorkflow:
         return job
 
     async def run(self, config, action, params, run_id):
-        reserved = None
         try:
             with task_lock(self.directory):
                 self.store.recover()
@@ -80,34 +165,17 @@ class ReplyWorkflow:
                             status="ready", note=context["reason"] or "对话已读取，可生成回复"
                         )
                     elif action == "generate":
-                        self.store.check_reply_pending(job.job_id)
-                        if not context["canReply"]:
-                            raise ValueError(context["reason"])
                         self.state.update(context=context, draft=None, job=job.as_dict())
-                        result = await self.bridge.request(
-                            "generate",
-                            transport="llm",
-                            config=config.llm.model_dump(),
-                            messages=context["messages"],
-                            job={"title": job.title, "company": job.company},
-                        )
-                        await control.checkpoint()
-                        current = await adapter.read_conversation(self.chat, job)
-                        if (
-                            current["fingerprint"] != context["fingerprint"]
-                            or not current["canReply"]
-                        ):
-                            self.state["context"] = current
-                            raise LayoutChanged("生成期间会话已变化，请重新生成回复")
-                        message = result.get("message")
-                        if (
-                            not isinstance(message, str)
-                            or not message.strip()
-                            or len(message) > 1000
-                        ):
-                            raise ValueError("模型未返回 1–1000 字的有效回复")
-                        self.state["draft"] = self.store.save_reply(
-                            uuid.uuid4().hex, job.job_id, context, config.llm.model, message
+                        self.state["draft"] = await generate_reply(
+                            self.store,
+                            self.bridge,
+                            adapter,
+                            self.chat,
+                            job,
+                            context,
+                            config,
+                            control,
+                            run_id,
                         )
                         self.state.update(status="draft", note="草稿已生成，请编辑确认后发送")
                     else:
@@ -118,25 +186,20 @@ class ReplyWorkflow:
                         ):
                             self.state.update(context=context, draft=None)
                             raise LayoutChanged("草稿对应的会话已变化，请重新读取并生成回复")
-                        await control.checkpoint()
-                        self.store.reserve_reply(
-                            record["id"], run_id, params["message"].strip(), config.run.daily_limit
-                        )
-                        reserved = record["id"]
                         self.store.update_run(run_id, attempts=1, target=1)
-                        result = await adapter.send_custom(
+                        result = await send_reply(
+                            self.store,
+                            adapter,
                             self.chat,
                             job,
+                            record,
                             params["message"].strip(),
-                            expected_context=record["context_hash"],
+                            config,
+                            control,
+                            run_id,
                         )
-                        status = "sent" if result.status == "sent" else "unknown"
-                        self.store.finish_reply(reserved, status, result.note)
-                        reserved = None
-                        self.state.update(status=status, note=result.note, draft=None)
-                        self.store.update_run(run_id, sent=int(status == "sent"))
-                        if status != "sent":
-                            raise LayoutChanged(result.note)
+                        self.state.update(status="sent", note=result.note, draft=None)
+                        self.store.update_run(run_id, sent=1)
                         self.state["context"] = {
                             **context,
                             "messages": (
@@ -167,9 +230,6 @@ class ReplyWorkflow:
                 )
                 self.store.event(run_id, "WARNING", "reply_error", self.state["note"])
         finally:
-            if reserved:
-                self.store.finish_reply(
-                    reserved, "unknown", "回复期间中断或异常，请到网站核对；不会自动重发"
-                )
+            if action == "send":
                 self.state["draft"] = None
         return self.store.run(run_id)

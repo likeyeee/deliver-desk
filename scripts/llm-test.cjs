@@ -13,7 +13,6 @@ const request = () => ({
     model: "deepseek-v4-flash",
     system_prompt: "我是示例求职者，表达简洁，不编造经历。",
     temperature: 0.7,
-    max_tokens: 1024,
   },
   job: { title: "AI应用工程师", company: "示例科技" },
   messages: [
@@ -110,7 +109,11 @@ test("official API, bearer auth, persona, ordered conversation and final content
     return response(completion());
   });
   const result = await llm.generate("test", request());
-  assert.deepEqual(result, { message: "我有相关项目经验，方便进一步介绍。" });
+  assert.deepEqual(result, {
+    message: "我有相关项目经验，方便进一步介绍。",
+    usage: {},
+    finishReason: "stop",
+  });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://api.deepseek.com/chat/completions");
   assert.equal(calls[0].options.headers.Authorization, "Bearer " + key);
@@ -118,6 +121,7 @@ test("official API, bearer auth, persona, ordered conversation and final content
   const body = JSON.parse(calls[0].options.body);
   assert.deepEqual(body.thinking, { type: "disabled" });
   assert.equal(body.stream, false);
+  assert.ok(!("max_tokens" in body));
   assert.equal(body.messages[0].content, request().config.system_prompt);
   assert.deepEqual(
     body.messages.slice(2),
@@ -147,7 +151,6 @@ for (const [name, value] of [
   ["truncated", completion("partial", "length")],
   ["empty", completion("")],
   ["reasoning only", completion(null)],
-  ["oversized", completion("字".repeat(1001))],
   [
     "tool calls",
     {
@@ -170,6 +173,31 @@ for (const [name, value] of [
       /DeepSeek/,
     );
   });
+
+test("long complete replies are preserved and obsolete token caps never reach the API", async () => {
+  const content = "这是一段完整的项目说明。".repeat(800) + "所有内容到此结束。";
+  const llm = new DeepSeek(vault, async (_url, options) => {
+    assert.ok(!("max_tokens" in JSON.parse(options.body)));
+    return response({
+      ...completion(content),
+      usage: {
+        prompt_tokens: 800,
+        completion_tokens: 6200,
+        total_tokens: 7000,
+      },
+    });
+  });
+  const value = request();
+  value.config.max_tokens = 128;
+  const result = await llm.generate("long", value);
+  assert.equal(result.message, content);
+  assert.deepEqual(result.usage, {
+    prompt_tokens: 800,
+    completion_tokens: 6200,
+    total_tokens: 7000,
+  });
+  assert.equal(result.finishReason, "stop");
+});
 
 for (const status of [401, 402, 422, 429, 500, 503])
   test(`HTTP ${status} is redacted and never retried`, async () => {

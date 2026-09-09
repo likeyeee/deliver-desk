@@ -6,6 +6,8 @@ import {
   Send,
   Square,
   X,
+  Radio,
+  ScrollText,
 } from "lucide-react";
 
 const statuses = {
@@ -24,6 +26,7 @@ export default function RepliesPanel({
   onBrowser,
 }) {
   const reply = state.replyState || {};
+  const monitor = state.autoReply || {};
   const [jobId, setJobId] = useState(reply.job?.job_id || "");
   const [filter, setFilter] = useState("");
   const [text, setText] = useState("");
@@ -53,7 +56,7 @@ export default function RepliesPanel({
       <div className="page-heading">
         <div className="simple-heading">
           <h1>消息回复</h1>
-          <p>读取对话，让你的求职人格生成回复，再由你确认发送。</p>
+          <p>用你的求职人格回复消息，可手动确认，也可开启自动监控。</p>
         </div>
         <button className="btn" onClick={onSettings}>
           <Sparkles size={16} />
@@ -68,6 +71,104 @@ export default function RepliesPanel({
           </button>
         </div>
       )}
+      <section
+        className={
+          "panel auto-reply-panel " + (monitor.enabled ? "enabled" : "")
+        }
+        aria-label="自动回复设置"
+      >
+        <div className="auto-reply-heading">
+          <div>
+            <h2>
+              <Radio size={19} />
+              自动回复
+            </h2>
+            <p>
+              每 {monitor.intervalSeconds || 30}{" "}
+              秒检查会话。招聘方发来消息且你尚未回复时，自动生成并发送。
+            </p>
+          </div>
+          <button
+            className="auto-reply-switch"
+            type="button"
+            role="switch"
+            aria-label="自动回复"
+            aria-checked={!!monitor.enabled}
+            disabled={
+              monitor.status === "stopping" ||
+              (!monitor.enabled && (locked || !state.llm?.configured))
+            }
+            onClick={run(async () => {
+              if (!monitor.enabled) await saveModel();
+              return window.desk.autoReply({
+                action: monitor.enabled ? "disable" : "enable",
+              });
+            })}
+          >
+            <span className="switch-track">
+              <span />
+            </span>
+            {monitor.enabled ? "已开启" : "已关闭"}
+          </button>
+        </div>
+        <p
+          className={
+            "auto-reply-note " +
+            (monitor.status === "needs_attention" ? "ai-warning" : "")
+          }
+          role="status"
+        >
+          {monitor.note || "开启后开始检查，退出应用后自动停止。"}
+        </p>
+        <div className="auto-reply-stats">
+          <span>
+            本轮检查 <b>{monitor.scanned || 0}</b> 个会话
+          </span>
+          <span>
+            发现待回复 <b>{monitor.pending || 0}</b> 条
+          </span>
+          <span>
+            本次开启已送达 <b>{monitor.totalSent || 0}</b> 条
+          </span>
+          {!!monitor.errors && (
+            <span className="ai-warning">
+              需查看日志 <b>{monitor.errors}</b> 项
+            </span>
+          )}
+        </div>
+        <div className="auto-reply-footer">
+          <button
+            className="btn"
+            disabled={locked || monitor.enabled}
+            onClick={run(() => window.desk.autoReply({ action: "scan" }))}
+          >
+            <RefreshCw size={15} />
+            扫描待回复
+          </button>
+          <small>
+            {monitor.lastScanAt && (
+              <>
+                上次检查{" "}
+                {new Date(monitor.lastScanAt).toLocaleTimeString("zh-CN", {
+                  hour12: false,
+                })}
+                {monitor.nextScanAt ? " · " : ""}
+              </>
+            )}
+            {monitor.nextScanAt && (
+              <>
+                下次检查{" "}
+                {new Date(monitor.nextScanAt).toLocaleTimeString("zh-CN", {
+                  hour12: false,
+                })}
+              </>
+            )}
+          </small>
+        </div>
+        <p className="ai-hint">
+          包含已读但未回复的文字消息。使用已保存的模型与人格；遇到其他任务会等待，退出应用后停止。扫描按钮只读取会话。
+        </p>
+      </section>
       <div className="reply-grid">
         <section className="panel reply-contacts">
           <div className="ai-section-title">
@@ -108,7 +209,7 @@ export default function RepliesPanel({
           </div>
           {!jobs.length && (
             <p className="ai-hint">
-              完成首次沟通后，职位会出现在这里。只会读取你选中的会话。
+              扫描网站会话后，已沟通的职位会出现在这里，也会保留投递工具中的沟通记录。
             </p>
           )}
         </section>
@@ -203,21 +304,16 @@ export default function RepliesPanel({
                   aria-label="回复草稿"
                   value={text}
                   disabled={locked}
-                  maxLength={2000}
                   onChange={(event) => setText(event.target.value)}
                 />
                 <small>
-                  {[...text.trim()].length} / 1,000 字 · 发送前可编辑
+                  {[...text.trim()].length.toLocaleString()} 字 ·
+                  完整正文，发送前可编辑
                 </small>
               </label>
               <button
                 className="btn primary"
-                disabled={
-                  locked ||
-                  !text.trim() ||
-                  [...text.trim()].length > 1000 ||
-                  pending
-                }
+                disabled={locked || !text.trim() || pending}
                 onClick={() =>
                   setConfirm({
                     message: text.trim(),
@@ -269,6 +365,12 @@ export default function RepliesPanel({
                     <td>
                       <b>{row.title}</b>
                       <small>{row.company}</small>
+                      <small>
+                        {row.source === "auto" ? "自动回复" : "手动回复"} ·{" "}
+                        {new Date(row.created_at).toLocaleString("zh-CN", {
+                          hour12: false,
+                        })}
+                      </small>
                     </td>
                     <td className="reply-history-message">
                       <p>{row.message}</p>
@@ -304,6 +406,41 @@ export default function RepliesPanel({
         ) : (
           <p className="ai-hint">
             生成的草稿、已发送回复和待核对结果会保存在这里。
+          </p>
+        )}
+      </section>
+      <section className="panel auto-reply-log" aria-label="回复活动日志">
+        <div className="ai-section-title">
+          <ScrollText size={19} />
+          <h2>回复日志</h2>
+          <small>发现、生成、发送与失败均保存在本机</small>
+        </div>
+        {state.replyEvents?.length ? (
+          <div className="reply-log-list">
+            {state.replyEvents.map((event) => (
+              <div
+                className={"reply-log-row " + event.level.toLowerCase()}
+                key={event.id}
+              >
+                <time>
+                  {new Date(event.time).toLocaleString("zh-CN", {
+                    hour12: false,
+                  })}
+                </time>
+                <div>
+                  {event.company && (
+                    <strong>
+                      {event.company} · {event.title}
+                    </strong>
+                  )}
+                  <p>{event.message}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="ai-hint">
+            扫描或生成回复后，会在这里显示完整操作过程。
           </p>
         )}
       </section>

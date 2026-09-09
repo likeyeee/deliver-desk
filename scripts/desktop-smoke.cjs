@@ -40,6 +40,7 @@ app
     let fixtureJob = "abc123";
     let fixtureJobs = [fixtureJob];
     let replyFixture = false;
+    let inboxFixture = false;
     host = new BaseWindow({
       width: 1360,
       height: 940,
@@ -82,6 +83,10 @@ app
     await browser.session.protocol.handle("https", (request) => {
       requests.push(request.url);
       const route = new URL(request.url).pathname;
+      if (inboxFixture && route === "/web/geek/chat")
+        return new Response(fixtures.INBOX_HTML, {
+          headers: { "content-type": "text/html;charset=utf-8" },
+        });
       const detailId = route.match(/\/job_detail\/([\w-]+)\.html/);
       if (detailId) fixtureJob = detailId[1];
       const card = fixtures.LIST_HTML.match(
@@ -114,7 +119,8 @@ app
           );
       html = html.replace(
         "</body>",
-        "<style>html{min-width:1280px}body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
+        (inboxFixture ? '<nav><a href="/web/geek/chat">消息 3</a></nav>' : "") +
+          "<style>html{min-width:1280px}body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
       );
       return new Response(html, {
         headers: { "content-type": "text/html;charset=utf-8" },
@@ -142,6 +148,26 @@ app
     config.run.max_sends = 1;
     config.browser.timeout_seconds = 4;
     await backend.request("saveConfig", { config });
+    inboxFixture = true;
+    assert.equal(browser.views.size, 0);
+    await backend.request("autoReply", { action: "scan" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 30000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.autoReply),
+    );
+    assert.equal(state.run.matched, 2);
+    assert.equal(state.attemptsToday, 0);
+    assert.equal(state.history.length, 0);
+    inboxFixture = false;
+    verificationPopups.length = 0;
+    console.log(
+      "PASS: first-launch inbox scan navigates an unloaded native browser before inspecting its DOM",
+    );
     await backend.request("start", { mode: "preview" });
     state = await until(async () => {
       const s = await backend.request("snapshot");
@@ -570,6 +596,88 @@ app
     console.log(
       "PASS: RPC model generation, draft editing, conversation binding, reply receipt and dedup",
     );
+    inboxFixture = true;
+    config.auto_reply.settle_seconds = 0;
+    config.auto_reply.interval_seconds = 10;
+    await backend.request("saveConfig", { config });
+    await browser.command("goto", {
+      page: retainedChat,
+      url: "https://www.zhipin.com/web/geek/chat",
+    });
+    await browser.command("evaluate", {
+      page: retainedChat,
+      body: "inboxFixture.select('inbox001'); document.getElementById('chat-input').textContent='保留的网页草稿'; return true;",
+    });
+    await backend.request("autoReply", { action: "scan" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 30000);
+    assert.equal(state.run.status, "needs_attention");
+    assert.match(state.autoReply.note, /未发送草稿/);
+    assert.equal(
+      await browser.command("evaluate", {
+        page: retainedChat,
+        body: "return document.getElementById('chat-input').textContent;",
+      }),
+      "保留的网页草稿",
+    );
+    await browser.command("evaluate", {
+      page: retainedChat,
+      body: "document.getElementById('chat-input').textContent=''; return true;",
+    });
+    await backend.request("autoReply", { action: "scan" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 30000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.autoReply),
+    );
+    assert.equal(state.run.matched, 2);
+    assert.equal(state.attemptsToday, 6);
+    const completeReply =
+      "先明确问题，再根据已知信息逐项说明。".repeat(100) + "完整说明结束。";
+    backend.llm.generate = async (_id, params) => {
+      llmCalls.push(params);
+      return { message: completeReply, usage: { completion_tokens: 1500 } };
+    };
+    await backend.request("autoReply", { action: "enable" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active && s.autoReply.totalSent === 2 ? s : false;
+    }, 45000);
+    assert.ok(state.autoReply.enabled);
+    assert.equal(state.attemptsToday, 8);
+    const autoReplies = state.replies.filter((row) => row.source === "auto");
+    assert.equal(autoReplies.length, 2);
+    assert.ok(
+      autoReplies.every(
+        (row) => row.status === "sent" && row.message === completeReply,
+      ),
+    );
+    assert.equal(state.history.length, 5);
+    const firstScan = state.autoReply.lastScanAt;
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active && s.autoReply.lastScanAt !== firstScan ? s : false;
+    }, 35000);
+    assert.equal(
+      state.attemptsToday,
+      8,
+      "A scheduled second scan cannot resend the same incoming turn",
+    );
+    assert.equal(llmCalls.length, 3);
+    assert.ok(state.replyEvents.some((event) => event.kind === "auto_sent"));
+    await backend.request("autoReply", { action: "disable" });
+    await until(
+      async () => !(await backend.request("snapshot")).autoReply.enabled,
+    );
+    console.log(
+      "PASS: native inbox scan, read-but-unanswered messages, full automatic replies, timer, audit and dedup",
+    );
     await backend.close();
     browser.destroy();
     host.destroy();
@@ -586,6 +694,7 @@ app
           batchSends: 3,
           batchSeconds,
           llmDraftAndReply: true,
+          automaticReplies: 2,
         },
         null,
         2,

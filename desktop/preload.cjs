@@ -7,6 +7,7 @@ const commands = [
   "resolve",
   "reply",
   "resolveReply",
+  "autoReply",
   "llm",
   "openBrowser",
   "browserViewport",

@@ -78,6 +78,72 @@ CONTACT_LIST_HTML = """<aside id="contacts">
 </aside>"""
 
 
+INBOX_HTML = """<!doctype html><html><body>
+<nav><a href="/web/geek/recommend">示例用户</a><a href="/web/geek/chat">消息 <span id="global-unread">3</span></a></nav>
+<aside class="chat-user"><input placeholder="搜索30天内的联系人">
+<div class="label-list"><ul><li class="selected"><span class="label-name">全部</span></li><li><span class="label-name">未读 <i>(3)</i></span></li></ul></div>
+<div class="user-list"><div class="user-list-content"><ul id="inbox-rows"></ul><div class="boss-list-footer"><span class="finished">没有更多了</span></div></div></div></aside>
+<div class="chat-conversation" hidden>
+<div class="top-info-content"><div class="user-info"><div class="base-info"><div class="name-content"><span class="name-text"></span></div><span class="company"></span><span class="base-title">招聘者</span></div></div>
+<div class="chat-position-content"><div class="position-content"><span class="position-name">AI应用工程师</span><button id="view-job">查看职位</button></div></div></div>
+<div class="chat-record" id="messages"></div><div id="chat-input" contenteditable="true" role="textbox"></div><button id="inbox-send">发送</button>
+</div>
+<script>
+const contacts = [
+ {id:'inbox001',name:'李招聘',company:'示例科技',unread:3,text:'请介绍你对 AI 应用开发的理解。'},
+ {id:'inbox002',name:'王招聘',company:'示例科技',unread:0,text:'收到，想了解一下你对岗位的看法。'},
+ {id:'inbox003',name:'赵招聘',company:'示例科技',unread:7,text:'感谢，期待进一步沟通。',replied:true},
+ {id:'inbox004',name:'孙招聘',company:'示例科技',unread:2,text:'[图片]',unsupported:true},
+ {id:'inbox005',name:'周招聘',company:'示例科技',unread:1,text:'请发一下作品集。',draft:true}
+];
+let selected=null;
+const state = window.inboxFixture = {contacts,sends:[],receipt:true};
+const normMessage=(role,content,id,supported=true)=>({role,content,id,supported});
+for(const c of contacts) c.messages=[normMessage('assistant','您好，希望了解这个职位。',c.id+'-own0'),normMessage(c.replied?'assistant':'user',c.text,c.id+'-last',!c.unsupported)];
+function renderRows(){
+ document.getElementById('inbox-rows').innerHTML='';
+ for(const c of contacts){
+  const li=document.createElement('li'),row=document.createElement('div');row.className='friend-content';row.dataset.fixtureId=c.id;
+  row.innerHTML='<div class="figure"><span class="notice-badge"></span></div><div class="text"><div class="title-box"><span class="name-box"><span class="name-text"></span><span class="brand"></span><i class="vline"></i><span>招聘者</span></span></div><div class="last-msg"><span class="draft"></span><span class="last-msg-text"></span></div></div>';
+  row.querySelector('.name-text').textContent=c.name;row.querySelector('.brand').textContent=c.company;
+  row.querySelector('.last-msg-text').textContent=c.messages.at(-1).content;
+  row.querySelector('.notice-badge').textContent=c.unread?String(c.unread):'';
+  if(c.draft)row.querySelector('.draft').textContent='[草稿]';else row.querySelector('.draft').remove();
+  row.onclick=()=>select(c);li.append(row);document.getElementById('inbox-rows').append(li);
+ }
+}
+function renderMessages(){
+ const list=document.getElementById('messages');list.innerHTML='';
+ for(const m of selected.messages){const row=document.createElement('div');row.className='message-item '+(m.role==='assistant'?'item-myself':'item-friend');row.dataset.messageId=m.id;
+  const text=document.createElement('div');text.className=m.supported?'text-content':'file-card';text.textContent=m.content;row.append(text);
+  if(m.role==='assistant'){const mark=document.createElement('span');mark.className='receipt';mark.textContent=m.receipt||'送达';row.append(mark);}list.append(row);
+ }
+ list.scrollTop=list.scrollHeight;
+}
+function select(c){
+ selected=c;state.selected=c.id;document.querySelector('.chat-conversation').hidden=false;
+ for(const row of document.querySelectorAll('.friend-content'))row.classList.toggle('selected',row.dataset.fixtureId===c.id);
+ document.querySelector('.user-info .name-text').textContent=c.name;document.querySelector('.user-info .company').textContent=c.company;
+ document.querySelector('.position-name').textContent='AI应用工程师';document.getElementById('view-job').onclick=()=>window.open('/job_detail/'+(state.wrongJob||c.id)+'.html');
+ document.getElementById('chat-input').textContent=c.draft?'我的未完成草稿':'';
+ c.unread=0;document.querySelector('[data-fixture-id="'+c.id+'"] .notice-badge').textContent='';renderMessages();
+}
+state.addMessage=(id,text)=>{const c=contacts.find(c=>c.id===id);c.messages.push(normMessage('user',text,id+'-'+c.messages.length));c.unread++;
+ const row=document.querySelector('[data-fixture-id="'+id+'"]');row.querySelector('.last-msg-text').textContent=text;row.querySelector('.notice-badge').textContent=String(c.unread);if(selected===c)renderMessages();};
+state.select=id=>select(contacts.find(c=>c.id===id));
+document.getElementById('inbox-send').onclick=event=>{
+ if(!event.isTrusted)throw Error('native input required');const editor=document.getElementById('chat-input'),text=editor.textContent;
+ if(!text.trim())return;state.sends.push({id:selected.id,text});const m=normMessage('assistant',text,selected.id+'-own'+selected.messages.length);m.receipt='发送中';selected.messages.push(m);editor.textContent='';renderMessages();
+ const row=document.querySelector('[data-fixture-id="'+selected.id+'"]');row.querySelector('.last-msg-text').textContent=text;
+ if(state.receipt)setTimeout(()=>{m.receipt='送达';renderMessages();},120);
+};
+for(const label of document.querySelectorAll('.label-list li'))label.onclick=()=>{for(const item of document.querySelectorAll('.label-list li'))item.classList.toggle('selected',item===label);};
+renderRows();
+</script>
+<style>body{font:14px/1.6 sans-serif;padding:16px}.chat-user{float:left;width:260px}.label-list ul{display:flex;gap:18px;list-style:none;padding:0}.label-name{cursor:pointer}.user-list-content{height:245px;overflow:auto;border:1px solid #ccc}.user-list-content ul{list-style:none;margin:0;padding:0}.friend-content{height:78px;padding:10px;cursor:pointer}.friend-content.selected{background:#e2efe8}.name-box{display:flex;gap:6px}.last-msg{font-size:12px;overflow:hidden;height:20px}.chat-conversation{margin-left:290px}.base-info{display:flex;gap:12px}.chat-record{height:290px;overflow:auto}.message-item{margin:12px 0;padding:8px;background:#f1f4f2}.item-myself{background:#e3f0e7}.receipt{display:block;font-size:11px}#chat-input{min-height:70px;max-height:140px;overflow:auto;border:1px solid #aaa;white-space:pre-wrap}button{padding:10px}.boss-list-footer{padding:10px}</style>
+</body></html>"""
+
+
 async def test_reuses_logged_in_page_without_login_navigation(web):
     navigations = []
     web.page.on("framenavigated", lambda frame: navigations.append(frame.url))
@@ -794,3 +860,195 @@ async def test_reply_workflow_generates_edits_sends_and_blocks_stale_model_resul
     assert "会话已变化" in workflow.state["note"]
     assert workflow.state["draft"] is None
     assert len(store.reply_history()) == 1
+
+
+async def test_auto_inbox_reads_without_sending_then_replies_once_to_unanswered_text(
+    web, config, store
+):
+    from contextlib import asynccontextmanager
+
+    from boss_cli.auto_replies import AutoReplyWorkflow
+
+    await web.page.route(
+        "**/web/geek/chat",
+        lambda route: route.fulfill(body=INBOX_HTML, content_type="text/html; charset=utf-8"),
+    )
+    await web.page.goto("https://www.zhipin.com/web/geek/chat")
+    calls = []
+    long_reply = "我对岗位的理解是先明确问题，再验证方案与实际效果。" * 100 + "以上是完整说明。"
+
+    class Model:
+        async def request(self, method, **params):
+            calls.append(params)
+            return {"message": long_reply, "usage": {"completion_tokens": 1800}}
+
+    @asynccontextmanager
+    async def factory(*_args):
+        yield web.session
+
+    config.auto_reply.settle_seconds = 0
+    workflow = AutoReplyWorkflow(store, store.directory, Model(), factory)
+    scanned = await workflow.cycle(config, "inbox-read", scan_only=True)
+    assert scanned["status"] == "completed", workflow.state
+    assert scanned["matched"] == 2, store.reply_events()
+    assert not calls
+    assert store.history() == []
+    assert store.attempts_today() == 0
+    assert {row["job_id"] for row in store.reply_contacts()} == {
+        "inbox001",
+        "inbox002",
+        "inbox003",
+        "inbox004",
+    }
+    sent = await workflow.cycle(config, "inbox-send")
+    assert sent["status"] == "completed", workflow.state
+    assert sent["sent"] == 2, store.reply_events()
+    assert len(calls) == 2
+    assert all("max_tokens" not in call["config"] for call in calls)
+    assert all(
+        row["message"] == long_reply and row["source"] == "auto" for row in store.reply_history()
+    )
+    actual = await web.page.evaluate("window.inboxFixture.sends")
+    assert {row["id"] for row in actual} == {"inbox001", "inbox002"}
+    assert all(row["text"] == long_reply for row in actual)
+    assert store.attempts_today() == 2
+    assert store.history() == []
+    await web.page.evaluate("document.getElementById('global-unread').textContent='999'")
+    again = await workflow.cycle(config, "inbox-again")
+    assert again["sent"] == 0
+    assert len(calls) == 2
+    kinds = {event["kind"] for event in store.reply_events()}
+    assert {
+        "auto_pending",
+        "reply_generate",
+        "reply_generated",
+        "reply_send",
+        "reply_sent",
+        "auto_skipped",
+    } <= kinds
+
+
+async def inbox_workflow(web, config, store, model):
+    from contextlib import asynccontextmanager
+
+    from boss_cli.auto_replies import AutoReplyWorkflow
+
+    await web.page.route(
+        "**/web/geek/chat",
+        lambda route: route.fulfill(body=INBOX_HTML, content_type="text/html; charset=utf-8"),
+    )
+    await web.page.goto("https://www.zhipin.com/web/geek/chat")
+    await web.page.evaluate("contacts.splice(1); renderRows()")
+    config.auto_reply.settle_seconds = 0
+
+    @asynccontextmanager
+    async def factory(*_args):
+        yield web.session
+
+    return AutoReplyWorkflow(store, store.directory, model, factory)
+
+
+async def test_auto_reply_discards_generation_when_new_message_arrives(web, config, store):
+    calls = []
+
+    class Model:
+        async def request(self, method, **params):
+            calls.append(params)
+            if len(calls) == 1:
+                await web.page.evaluate(
+                    "inboxFixture.addMessage('inbox001','补充：请先介绍项目目标。')"
+                )
+            return {"message": "过期的回复" if len(calls) == 1 else "这是针对项目目标的完整回复。"}
+
+    workflow = await inbox_workflow(web, config, store, Model())
+    first = await workflow.cycle(config, "incoming-during-model")
+    assert first["sent"] == 0
+    assert not store.reply_history()
+    assert store.attempts_today() == 0
+    second = await workflow.cycle(config, "new-context")
+    assert second["sent"] == 1, workflow.state
+    assert calls[-1]["messages"][-1]["content"] == "补充：请先介绍项目目标。"
+    assert await web.page.evaluate("inboxFixture.sends") == [
+        {"id": "inbox001", "text": "这是针对项目目标的完整回复。"}
+    ]
+
+
+async def test_auto_reply_unknown_receipt_blocks_new_inbound_and_reenable(web, config, store):
+    calls = []
+
+    class Model:
+        async def request(self, method, **params):
+            calls.append(params)
+            return {"message": "这一条只提交一次。"}
+
+    workflow = await inbox_workflow(web, config, store, Model())
+    await web.page.evaluate("inboxFixture.receipt=false")
+    first = await workflow.cycle(config, "missing-receipt")
+    assert first["sent"] == 0
+    assert store.reply_history()[0]["status"] == "unknown"
+    assert store.attempts_today() == 1
+    await web.page.evaluate("inboxFixture.addMessage('inbox001','你还在吗？')")
+    workflow.prepare()
+    second = await workflow.cycle(config, "uncertain-reenable")
+    assert second["sent"] == 0
+    assert len(calls) == 1
+    assert await web.page.evaluate("inboxFixture.sends.length") == 1
+    assert any("待核对" in event["message"] for event in store.reply_events())
+
+
+async def test_auto_reply_respects_quota_and_preserves_existing_web_draft(web, config, store):
+    class Model:
+        async def request(self, *_args, **_kwargs):
+            pytest.fail("Draft preservation and quota checks must precede model generation")
+
+    workflow = await inbox_workflow(web, config, store, Model())
+    await web.page.evaluate(
+        "inboxFixture.select('inbox001'); document.getElementById('chat-input').textContent='正在编辑的私人草稿'"
+    )
+    blocked = await workflow.cycle(config, "preserve-web-draft")
+    assert blocked["status"] == "needs_attention"
+    assert await web.page.locator("#chat-input").inner_text() == "正在编辑的私人草稿"
+    assert store.attempts_today() == 0
+    await web.page.locator("#chat-input").fill("")
+    config.run.daily_limit = 1
+    store.event("test-run", "INFO", "send_reserved", "已使用最后一个发送名额")
+    limited = await workflow.cycle(config, "limit-auto")
+    assert limited["status"] == "needs_attention"
+    assert "今日发送上限" in limited["note"]
+    assert await web.page.evaluate("inboxFixture.sends.length") == 0
+
+
+async def test_inbox_recycled_row_and_wrong_public_job_are_rejected(web, config, store):
+    from boss_cli.inbox import InboxReader
+
+    await inbox_workflow(web, config, store, None)
+    reader = InboxReader(web)
+    await reader.open()
+    entry = (await reader.rows())[0]
+    await web.page.locator(".friend-content .name-text").evaluate(
+        "e => e.textContent='另一位招聘者'"
+    )
+    with pytest.raises(LayoutChanged, match="列表已更新"):
+        await reader.select(entry)
+    assert not await web.page.locator(".chat-conversation").is_visible()
+    await web.page.locator(".friend-content .name-text").evaluate("e => e.textContent='李招聘'")
+    await web.session.context.route(
+        "**/job_detail/*.html",
+        lambda route: route.fulfill(
+            body=DETAIL_HTML.replace(
+                "<h1>AI应用工程师</h1>", "<h1>其他职位</h1><p>AI应用工程师</p>"
+            ),
+            content_type="text/html; charset=utf-8",
+        ),
+    )
+    with pytest.raises(LayoutChanged, match="职位名称与公开职位详情不一致"):
+        await reader.select(entry)
+    assert store.attempts_today() == 0
+
+
+async def test_identical_inbox_previews_do_not_hide_distinct_contacts(web, config, store):
+    workflow = await inbox_workflow(web, config, store, None)
+    await web.page.evaluate("contacts.push({...contacts[0], id:'inbox002'}); renderRows()")
+    run = await workflow.cycle(config, "same-names", scan_only=True)
+    assert run["matched"] == 2, workflow.state
+    assert {row["job_id"] for row in store.reply_contacts()} == {"inbox001", "inbox002"}

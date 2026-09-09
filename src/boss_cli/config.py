@@ -148,14 +148,22 @@ class LLMConfig(StrictModel):
             "你以我的身份与招聘者交流，使用自然、礼貌、简洁的中文。"
             "只依据我提供的个人背景和对话事实回答，不编造工作经历、技能、薪资、"
             "联系方式或可面试时间；信息不足时向对方澄清或保留待我补充。"
-            "只输出可以直接发送的一条回复，不附解释、分析、标题或引号，尽量在200字内。"
+            "只输出可以直接发送的回复正文，不附解释、分析、标题或引号。"
+            "优先完整回答实际问题，长度随内容决定，不为凑字数重复，也不为缩短而遗漏要点。"
         ),
         min_length=1,
         max_length=20000,
     )
     temperature: float = Field(default=0.7, ge=0, le=2, allow_inf_nan=False)
-    max_tokens: int = Field(default=1024, ge=128, le=4096)
     context_messages: int = Field(default=20, ge=2, le=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def remove_legacy_token_limit(cls, value):
+        # Accept older exports without continuing to apply their artificial output cap.
+        if isinstance(value, dict):
+            value = {key: item for key, item in value.items() if key != "max_tokens"}
+        return value
 
     @field_validator("model", "system_prompt")
     @classmethod
@@ -163,6 +171,11 @@ class LLMConfig(StrictModel):
         if not value.strip():
             raise ValueError("模型和系统提示词不能为空")
         return value.strip()
+
+
+class AutoReplyConfig(StrictModel):
+    interval_seconds: int = Field(default=30, ge=10, le=3600)
+    settle_seconds: float = Field(default=2, ge=0, le=10, allow_inf_nan=False)
 
 
 class Config(StrictModel):
@@ -173,6 +186,7 @@ class Config(StrictModel):
     message: MessageConfig = Field(default_factory=MessageConfig)
     run: RunConfig = Field(default_factory=RunConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    auto_reply: AutoReplyConfig = Field(default_factory=AutoReplyConfig)
     selectors: dict[str, str] = Field(default_factory=dict)
 
     def directory(self, config_path: Path) -> Path:

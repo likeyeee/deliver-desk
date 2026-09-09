@@ -69,6 +69,10 @@ async function run() {
       .fromPartition("persist:boss")
       .protocol.handle("https", (request) => {
         const route = new URL(request.url).pathname;
+        if (globalThis.inboxTestMode && route === "/web/geek/chat")
+          return new Response(fixtures.INBOX_HTML, {
+            headers: { "content-type": "text/html;charset=utf-8" },
+          });
         if (route === "/web/user/")
           return new Response(
             `<!doctype html><html><body style="font:16px sans-serif;text-align:center;padding:90px"><h1>扫码登录 · 隔离测试页面</h1><p>这里仅模拟登录流程，没有连接真实招聘网站。</p><button id="demo-login" onclick="location.href='/web/geek/jobs'">模拟扫码完成</button></body></html>`,
@@ -319,8 +323,11 @@ async function run() {
               finish_reason: "stop",
               message: {
                 role: "assistant",
-                content:
-                  "我做过一个面向内部知识库的 AI 问答项目，可以介绍需求分析和效果评估的过程。",
+                content: globalThis.inboxTestMode
+                  ? "我会先明确岗位目标，再结合具体问题说明解决思路。".repeat(
+                      65,
+                    ) + "以上是完整回复。"
+                  : "我做过一个面向内部知识库的 AI 问答项目，可以介绍需求分析和效果评估的过程。",
               },
             },
           ],
@@ -376,7 +383,6 @@ async function run() {
   }
   await page.screenshot({
     path: path.join(output, "desktop-models-ui.png"),
-    fullPage: true,
   });
   await page.getByRole("button", { name: "去生成回复", exact: true }).click();
   await page.locator(".reply-contact").first().click();
@@ -410,7 +416,6 @@ async function run() {
     .fill(editedReply);
   await page.screenshot({
     path: path.join(output, "desktop-replies-ui.png"),
-    fullPage: true,
   });
   await page.getByRole("button", { name: "检查并发送", exact: true }).click();
   assert.equal((await snapshot()).attemptsToday, 3);
@@ -434,6 +439,108 @@ async function run() {
       ),
     /已处理/,
   );
+  await desktop.evaluate(async ({ webContents }) => {
+    globalThis.inboxTestMode = true;
+    const site = webContents
+      .getAllWebContents()
+      .find((wc) => wc.getURL().includes("/web/geek/chat"));
+    await site.loadURL("https://www.zhipin.com/web/geek/chat");
+  });
+  state = await snapshot();
+  state.config.auto_reply.settle_seconds = 0;
+  await page.evaluate(
+    (config) => window.desk.saveConfig({ config }),
+    state.config,
+  );
+  await page.reload();
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "消息回复", exact: true })
+    .click();
+  const autoSwitch = page.getByRole("switch", {
+    name: "自动回复",
+    exact: true,
+  });
+  assert.equal(await autoSwitch.getAttribute("aria-checked"), "false");
+  await page.getByRole("button", { name: "扫描待回复", exact: true }).click();
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active ? s : false;
+  }, 45000);
+  assert.equal(state.run.status, "completed", JSON.stringify(state.autoReply));
+  assert.equal(state.run.matched, 2);
+  assert.equal(state.attemptsToday, 4);
+  assert.equal(
+    (await desktop.evaluate(() => globalThis.llmRequests)).length,
+    1,
+  );
+  await autoSwitch.click();
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.autoReply.totalSent === 2 ? s : false;
+  }, 45000);
+  assert.equal(await autoSwitch.getAttribute("aria-checked"), "true");
+  assert.equal(state.attemptsToday, 6);
+  assert.equal(state.history.length, 3);
+  assert.ok(
+    state.replies
+      .filter((row) => row.source === "auto")
+      .every(
+        (row) =>
+          row.status === "sent" &&
+          row.message.length > 1000 &&
+          row.message.endsWith("以上是完整回复。"),
+      ),
+  );
+  const autoRequests = await desktop.evaluate(() =>
+    globalThis.llmRequests.slice(1),
+  );
+  assert.equal(autoRequests.length, 2);
+  assert.ok(autoRequests.every((request) => !("max_tokens" in request)));
+  await page
+    .getByRole("region", { name: "回复活动日志" })
+    .getByText("完整回复已确认送达", { exact: true })
+    .first()
+    .waitFor();
+  await page
+    .getByRole("region", { name: "自动回复设置" })
+    .getByText(state.autoReply.note, { exact: true })
+    .waitFor();
+  for (const width of [1080, 1360]) {
+    await desktop.evaluate(
+      ({ BaseWindow }, width) =>
+        BaseWindow.getAllWindows()[0].setContentSize(width, 940),
+      width,
+    );
+    await until(() =>
+      page.evaluate(
+        (width) =>
+          innerWidth === width &&
+          document.documentElement.scrollWidth <= innerWidth,
+        width,
+      ),
+    );
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({
+      path: path.join(output, `desktop-auto-replies-${width}-ui.png`),
+    });
+  }
+  await page
+    .getByRole("region", { name: "回复活动日志" })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: path.join(output, "desktop-reply-log-ui.png"),
+  });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await autoSwitch.click();
+  await until(async () => !(await snapshot()).autoReply.enabled);
+  await until(
+    async () => (await autoSwitch.getAttribute("aria-checked")) === "false",
+  );
+  assert.equal(await autoSwitch.getAttribute("aria-checked"), "false");
+  console.log(
+    "PASS: automatic reply toggle, read-only scan, complete long messages, local activity log and responsive layout",
+  );
   await page
     .locator("nav")
     .getByRole("button", { name: "模型与人格", exact: true })
@@ -455,6 +562,7 @@ async function run() {
         resizeWidths: [1080, 1360, 1580, 1080],
         pageFitsWidth: true,
         llmDraftAndReply: true,
+        automaticReplies: 2,
       },
       null,
       2,

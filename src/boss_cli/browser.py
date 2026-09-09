@@ -43,6 +43,12 @@ SELECTORS = {
     "chat_editor": '#chat-input, .input-area[contenteditable="true"], textarea.input-area, [contenteditable="true"][role="textbox"], textarea[placeholder*="消息"], [contenteditable="true"]',
     "chat_send": ".send-message",
     "outgoing_messages": ".message-item.item-myself .text-content, .message-item.is-self .text, .message-item.is-self .message-text, .message-item.is-me .text, .message-item.is-me .message-text, .message-item.send .text",
+    "inbox_root": ".chat-user",
+    "inbox_list": ".chat-user .user-list-content",
+    "inbox_rows": ".chat-user .user-list .friend-content:not(.drawer)",
+    "inbox_name": ".user-info .base-info .name-text",
+    "inbox_company": ".user-info .base-info > span:not(.base-title)",
+    "inbox_position": ".chat-position-content .position-name",
 }
 
 GATE_TEXT = re.compile(
@@ -58,6 +64,10 @@ class NeedsAttention(Exception):
 
 class LayoutChanged(Exception):
     """Do not guess a consequential click when the DOM no longer matches."""
+
+
+class ConversationChanged(LayoutChanged):
+    """New messages invalidated a draft before its send button was clicked."""
 
 
 @dataclass
@@ -936,7 +946,7 @@ class BossAdapter:
         if expected_context:
             context = await self.read_conversation(page, job)
             if context["fingerprint"] != expected_context or not context["canReply"]:
-                raise LayoutChanged("会话出现新消息或已不适合回复，请重新读取后生成")
+                raise ConversationChanged("会话出现新消息或已不适合回复，请重新读取后生成")
         await editor.fill(message)
         await self.control.delay(self.config.run.action_delay)
         # The user may switch conversations while a task is paused or waiting.
@@ -957,7 +967,7 @@ class BossAdapter:
             context = await self.read_conversation(page, job)
             if context["fingerprint"] != expected_context or not context["canReply"]:
                 await editor.fill("")
-                raise LayoutChanged("等待期间会话出现新消息，已清空本次草稿，未发送")
+                raise ConversationChanged("等待期间会话出现新消息，已清空本次草稿，未发送")
         send = (
             scope.get_by_role("button", name="发送", exact=True)
             .or_(scope.get_by_role("link", name="发送", exact=True))
@@ -1047,7 +1057,9 @@ class BossAdapter:
             + f" && b.{operation}();}}"
         )
 
-    async def chat_scope_via_job_popup(self, page: Page, editor: Locator, job: Job) -> Locator:
+    async def chat_scope_via_job_popup(
+        self, page: Page, editor: Locator, job: Job, *, discover=False
+    ) -> Locator:
         """Verify the actual public job link behind the full chat page's '查看职位'."""
         # The live chat's job card is a clickable container, not always an <a href>.
         # Walk from its unique editor to the smallest enclosing conversation, then
@@ -1089,12 +1101,18 @@ class BossAdapter:
             await popup.wait_for_url(re.compile(r"^https://www\.zhipin\.com/job_detail/"))
             await popup.wait_for_load_state("domcontentloaded")
             await self.gate(popup)
-            identity, _ = canonical_job_url(popup.url)
-            if identity != job.job_id:
+            identity, address = canonical_job_url(popup.url)
+            if not discover and identity != job.job_id:
                 raise LayoutChanged("聊天页查看职位打开了其他职位，未发送")
             body = await popup.locator("body").inner_text()
             if job.title not in body or job.company not in body:
                 raise LayoutChanged("聊天页打开的职位详情与目标公司/职位不一致")
+            if discover:
+                title = await self.unique_visible(popup.locator("h1"), "公开职位名称")
+                if (await title.inner_text()).strip() != job.title:
+                    raise LayoutChanged("会话职位名称与公开职位详情不一致，未自动回复")
+                job.job_id, job.url = identity, address
+                job.contacted = True
             verified = True
         finally:
             if popup and not popup.is_closed():
