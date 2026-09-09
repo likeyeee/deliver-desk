@@ -61,31 +61,49 @@ class InboxReader:
                 await self.page.goto(JOBS_URL, wait_until="domcontentloaded")
             else:
                 await self.ensure_empty_editor()
-            await self.adapter.gate(self.page)
-            destinations = set()
-            for link in await self.page.locator('a[href*="/web/geek/chat"]').all():
-                if not await link.is_visible():
-                    continue
-                target = urljoin(self.page.url, await link.get_attribute("href") or "")
-                parsed = urlsplit(target)
-                if (
-                    parsed.scheme == "https"
-                    and parsed.netloc == "www.zhipin.com"
-                    and parsed.path == "/web/geek/chat"
-                ):
-                    destinations.add(target)
-            if len(destinations) != 1:
+            deadline = time.monotonic() + self.config.browser.timeout_seconds
+            while time.monotonic() < deadline:
+                await self.control.checkpoint()
+                await self.adapter.gate(self.page)
+                destinations = set()
+                for link in await self.page.locator('a[href*="/web/geek/chat"]').all():
+                    if not await link.is_visible():
+                        continue
+                    target = urljoin(self.page.url, await link.get_attribute("href") or "")
+                    parsed = urlsplit(target)
+                    if (
+                        parsed.scheme == "https"
+                        and parsed.netloc == "www.zhipin.com"
+                        and parsed.path == "/web/geek/chat"
+                    ):
+                        destinations.add(parsed._replace(query="", fragment="").geturl())
+                if len(destinations) == 1:
+                    await self.page.goto(destinations.pop(), wait_until="domcontentloaded")
+                    break
+                await self.control.sleep(0.25)
+            else:
                 raise LayoutChanged("无法确认网站的唯一消息入口，请先在浏览器打开消息页")
-            await self.page.goto(destinations.pop(), wait_until="domcontentloaded")
         await self.adapter.gate(self.page)
         await self.ensure_empty_editor()
-        root = await self.adapter.unique_visible(
-            self.page.locator(self.selectors["inbox_root"]), "会话列表区域"
-        )
+        root = self.page.locator(self.selectors["inbox_root"])
+        all_label = root.locator(".label-list .label-name").filter(has_text=re.compile(r"^全部$"))
+        deadline = time.monotonic() + self.config.browser.timeout_seconds
+        while time.monotonic() < deadline:
+            await self.control.checkpoint()
+            await self.adapter.gate(self.page)
+            if (
+                await root.count() == 1
+                and await root.is_visible()
+                and await all_label.count() == 1
+                and await all_label.is_visible()
+            ):
+                break
+            await self.control.sleep(0.25)
+        else:
+            raise LayoutChanged("会话列表区域尚未加载或结构已变化，请查看浏览器；未自动发送")
         search = root.locator('input[placeholder*="联系人"]')
         if await search.count() == 1 and (await search.input_value()).strip():
             await search.fill("")
-        all_label = root.locator(".label-list .label-name").filter(has_text=re.compile(r"^全部$"))
         label = await self.adapter.unique_visible(all_label, "全部会话选项")
         if not await label.locator("..").evaluate("e => e.classList.contains('selected')"):
             await label.click()
@@ -95,10 +113,14 @@ class InboxReader:
             await self.adapter.gate(self.page)
             lists = self.page.locator(self.selectors["inbox_list"])
             if await lists.count() == 1 and await lists.is_visible():
-                self.list = lists
-                await self.list.evaluate("e => { e.scrollTop = 0; return true; }")
-                await self.control.sleep(0.25)
-                return
+                rows = self.page.locator(self.selectors["inbox_rows"])
+                footer = lists.locator(".boss-list-footer .finished")
+                finished = await footer.count() == 1 and "没有更多" in await footer.inner_text()
+                if await rows.count() or finished:
+                    self.list = lists
+                    await self.list.evaluate("e => { e.scrollTop = 0; return true; }")
+                    await self.control.sleep(0.25)
+                    return
             text = await root.inner_text()
             if re.search(r"暂无(?:消息|沟通|联系人)|当前没有", text):
                 return
@@ -144,20 +166,30 @@ class InboxReader:
             raise LayoutChanged("此会话已有网页草稿，保留给本人处理")
         self.adapter.chat_bindings.pop(self.page, None)
         await row.click()
+        name = self.page.locator(self.selectors["inbox_name"])
+        company = self.page.locator(self.selectors["inbox_company"])
+        position = self.page.locator(self.selectors["inbox_position"])
         deadline = time.monotonic() + self.config.browser.timeout_seconds
         while time.monotonic() < deadline:
             await self.control.checkpoint()
             await self.adapter.gate(self.page)
-            name = self.page.locator(self.selectors["inbox_name"])
             if await name.count() == 1 and await name.is_visible():
                 selected = await row.count() == 1 and await row.evaluate(
                     "e => e.classList.contains('selected')"
                 )
                 if selected and (await name.inner_text()).strip() == entry["name"]:
-                    break
+                    if (
+                        await company.count() == 1
+                        and await company.is_visible()
+                        and (await company.inner_text()).strip()
+                        and await position.count() == 1
+                        and await position.is_visible()
+                        and (await position.inner_text()).strip()
+                    ):
+                        break
             await self.control.sleep(0.2)
         else:
-            raise LayoutChanged("选中的联系人与聊天页姓名不一致，未自动回复")
+            raise LayoutChanged("联系人、公司或职位信息尚未加载完整或与所选会话不一致，未自动回复")
         company = await self.adapter.unique_visible(
             self.page.locator(self.selectors["inbox_company"]), "会话公司"
         )

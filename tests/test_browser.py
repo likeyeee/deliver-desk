@@ -1052,3 +1052,21 @@ async def test_identical_inbox_previews_do_not_hide_distinct_contacts(web, confi
     run = await workflow.cycle(config, "same-names", scan_only=True)
     assert run["matched"] == 2, workflow.state
     assert {row["job_id"] for row in store.reply_contacts()} == {"inbox001", "inbox002"}
+
+
+async def test_inbox_waits_for_company_and_position_after_contact_name(web, config, store):
+    workflow = await inbox_workflow(web, config, store, None)
+    await web.page.evaluate("""() => {
+      const original = select;
+      select = c => {
+        original(c);
+        const company=document.querySelector('.user-info .company');
+        const position=document.querySelector('.position-name');
+        company.hidden=true; position.textContent='';
+        setTimeout(() => { company.hidden=false; position.textContent='AI应用工程师'; },400);
+      };
+    }""")
+    run = await workflow.cycle(config, "delayed-header", scan_only=True)
+    assert run["matched"] == 1, workflow.state
+    assert run["errors"] == 0
+    assert store.attempts_today() == 0

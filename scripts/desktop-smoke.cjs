@@ -41,6 +41,7 @@ app
     let fixtureJobs = [fixtureJob];
     let replyFixture = false;
     let inboxFixture = false;
+    let inboxStartupDelay = false;
     host = new BaseWindow({
       width: 1360,
       height: 940,
@@ -84,9 +85,22 @@ app
       requests.push(request.url);
       const route = new URL(request.url).pathname;
       if (inboxFixture && route === "/web/geek/chat")
-        return new Response(fixtures.INBOX_HTML, {
-          headers: { "content-type": "text/html;charset=utf-8" },
-        });
+        return new Response(
+          inboxStartupDelay
+            ? fixtures.INBOX_HTML.replace(
+                "</body>",
+                `<script>
+            const inboxRoot=document.querySelector('.chat-user');
+            const inboxParent=inboxRoot.parentNode;
+            inboxRoot.remove();
+            setTimeout(() => inboxParent.prepend(inboxRoot), 400);
+          </script></body>`,
+              )
+            : fixtures.INBOX_HTML,
+          {
+            headers: { "content-type": "text/html;charset=utf-8" },
+          },
+        );
       const detailId = route.match(/\/job_detail\/([\w-]+)\.html/);
       if (detailId) fixtureJob = detailId[1];
       const card = fixtures.LIST_HTML.match(
@@ -119,7 +133,13 @@ app
           );
       html = html.replace(
         "</body>",
-        (inboxFixture ? '<nav><a href="/web/geek/chat">消息 3</a></nav>' : "") +
+        (inboxFixture
+          ? `<script>setTimeout(() => {
+          const nav=document.createElement('nav');
+          nav.innerHTML='<a href="/web/geek/chat?ka=header">消息 3</a><a href="/web/geek/chat?ka=menu">消息</a>';
+          document.body.append(nav);
+        },400);</script>`
+          : "") +
           "<style>html{min-width:1280px}body{font:14px/24px sans-serif;padding:20px}#chat-input{border:1px solid #aaa;min-height:60px;width:400px}button{padding:12px}a{display:inline-block}</style></body>",
       );
       return new Response(html, {
@@ -149,6 +169,7 @@ app
     config.browser.timeout_seconds = 4;
     await backend.request("saveConfig", { config });
     inboxFixture = true;
+    inboxStartupDelay = true;
     assert.equal(browser.views.size, 0);
     await backend.request("autoReply", { action: "scan" });
     state = await until(async () => {
@@ -164,6 +185,7 @@ app
     assert.equal(state.attemptsToday, 0);
     assert.equal(state.history.length, 0);
     inboxFixture = false;
+    inboxStartupDelay = false;
     verificationPopups.length = 0;
     console.log(
       "PASS: first-launch inbox scan navigates an unloaded native browser before inspecting its DOM",
