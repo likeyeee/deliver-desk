@@ -10,6 +10,7 @@ import sys
 import threading
 import uuid
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
 
 from filelock import Timeout
@@ -20,6 +21,7 @@ from .browser import LayoutChanged, clean_error
 from .config import Config, dump_config, load_config
 from .control import is_active, task_lock
 from .replies import ReplyWorkflow
+from .resume import ResumeWorkflow, generate_greeting
 from .rpc_browser import RpcBrowser, RpcSession
 from .runner import run_task
 from .storage import Store, private_dir
@@ -71,6 +73,7 @@ class DesktopService:
         self.config = load_config(config_path) if config_path.exists() else Config()
         self.config.state_dir = str(directory)
         self.bridge = Bridge()
+        self.resume = ResumeWorkflow(self.store, directory, self.bridge)
         self.browser = RpcBrowser(self.bridge)
         self.replies = ReplyWorkflow(
             self.store,
@@ -121,6 +124,7 @@ class DesktopService:
             "events": self.store.recent_events(150),
             "attemptsToday": self.store.attempts_today(),
             "replyState": self.replies.state,
+            "resume": self.resume.snapshot(),
             "replies": self.store.reply_history(),
             "replyContacts": self.store.reply_contacts(),
             "replyEvents": self.store.reply_events(),
@@ -139,6 +143,39 @@ class DesktopService:
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再修改配置")
             return self.save(params["config"])
+        if method == "resume":
+            if (
+                self.monitor_enabled
+                or is_active(self.directory)
+                or (self.task and not self.task.done())
+            ):
+                raise ValueError("请先停止当前任务和自动回复，再处理简历")
+            action = params.get("action")
+            if action == "import":
+                return self.resume.import_file(params["path"])
+            if action == "saveText":
+                return self.resume.save_text(params.get("text"))
+            if action == "saveProfile":
+                return self.resume.save_profile(params.get("profile"), params.get("revision"))
+            if action == "clear":
+                self.resume.check_revision(params.get("revision"))
+                return self.resume.clear()
+            if action not in {"analyze", "previewGreeting"}:
+                raise ValueError("无效的简历操作")
+            self.resume.check_revision(params.get("revision"))
+            if action == "previewGreeting" and not self.resume.document.profile:
+                raise ValueError("请先分析简历")
+            job = (
+                self.resume.preview_job(params.get("jobId", ""))
+                if action == "previewGreeting"
+                else None
+            )
+            self.run_id = uuid.uuid4().hex[:12]
+            self.task = asyncio.create_task(
+                self.resume.run(action, self.config.model_copy(deep=True), self.run_id, job)
+            )
+            self.task.add_done_callback(self.finished)
+            return {"runId": self.run_id}
         if method == "autoReply":
             action = params.get("action")
             if action == "disable":
@@ -205,7 +242,25 @@ class DesktopService:
             if mode == "verify":
                 self.store.pending_message(params.get("jobId", ""))
             config = self.config.model_copy(deep=True)
+            if (
+                mode == "send"
+                and config.message.mode == "ai"
+                and (not self.resume.document or not self.resume.document.profile)
+            ):
+                raise ValueError("请先上传并分析简历，再使用 AI 岗位招呼")
             self.run_id = uuid.uuid4().hex[:12]
+            greeting = (
+                partial(
+                    generate_greeting,
+                    store=self.store,
+                    bridge=self.bridge,
+                    config=config,
+                    resume=self.resume.document.model_copy(deep=True),
+                    run_id=self.run_id,
+                )
+                if mode == "send" and config.message.mode == "ai"
+                else None
+            )
             self.task = asyncio.create_task(
                 run_task(
                     config,
@@ -214,6 +269,7 @@ class DesktopService:
                     verify_job_id=params.get("jobId") if mode == "verify" else None,
                     run_id=self.run_id,
                     factory=lambda c, d: RpcSession(c, d, self.browser),
+                    greeting=greeting,
                 )
             )
             self.task.add_done_callback(self.finished)

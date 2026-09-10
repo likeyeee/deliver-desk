@@ -1561,7 +1561,78 @@ progress::-webkit-progress-value {
   font-size: 14px;
   margin: 18px 0;
 }
+.resume-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(330px, 1.1fr);
+  gap: 22px;
+  align-items: start;
+}
+.resume-source,
+.resume-profile {
+  padding: 24px;
+  min-width: 0;
+}
+.resume-file {
+  font-size: 13px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+  margin: 18px 0 5px;
+}
+.resume-text {
+  min-height: 440px;
+  line-height: 1.9;
+}
+.resume-profile textarea {
+  line-height: 1.8;
+  resize: vertical;
+}
+.resume-empty {
+  min-height: 260px;
+}
+.greeting-resume {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 4px 0 18px;
+  font-size: 12px;
+}
+.greeting-resume > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.greeting-resume > button {
+  flex-shrink: 0;
+}
+.message-panel .ai-hint,
+.message-panel .ai-warning {
+  margin: 14px 22px;
+}
+.message-panel fieldset .ai-hint,
+.message-panel fieldset .ai-warning {
+  margin: 10px 0;
+}
+.greeting-preview b,
+.greeting-preview small {
+  display: block;
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  font-weight: 400;
+}
+.greeting-preview p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 1160px) {
+  .resume-grid {
+    grid-template-columns: minmax(270px, 1fr) minmax(300px, 1.1fr);
+    gap: 16px;
+  }
+  .resume-source,
+  .resume-profile {
+    padding: 18px;
+  }
   .ai-config-grid {
     grid-template-columns: minmax(250px, 1fr) minmax(360px, 1.4fr);
     gap: 16px;

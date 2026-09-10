@@ -315,7 +315,8 @@ async function run() {
         );
       if (url !== "https://api.deepseek.com/chat/completions")
         throw Error("Unexpected test network request");
-      globalThis.llmRequests.push(JSON.parse(options.body));
+      const body = JSON.parse(options.body);
+      globalThis.llmRequests.push(body);
       return new Response(
         JSON.stringify({
           choices: [
@@ -323,11 +324,16 @@ async function run() {
               finish_reason: "stop",
               message: {
                 role: "assistant",
-                content: globalThis.inboxTestMode
-                  ? "我会先明确岗位目标，再结合具体问题说明解决思路。".repeat(
-                      65,
-                    ) + "以上是完整回复。"
-                  : "我做过一个面向内部知识库的 AI 问答项目，可以介绍需求分析和效果评估的过程。",
+                content:
+                  body.response_format?.type === "json_object"
+                    ? JSON.stringify(globalThis.resumeTestProfile)
+                    : globalThis.greetingTestMode
+                      ? `您好，看到贵公司的${JSON.parse(body.messages.at(-1).content).job.title}岗位。我曾负责知识库问答项目的需求分析与效果评估，掌握 Python、SQL，希望结合这些经历参与岗位工作，期待进一步交流。`
+                      : globalThis.inboxTestMode
+                        ? "我会先明确岗位目标，再结合具体问题说明解决思路。".repeat(
+                            65,
+                          ) + "以上是完整回复。"
+                        : "我做过一个面向内部知识库的 AI 问答项目，可以介绍需求分析和效果评估的过程。",
               },
             },
           ],
@@ -541,6 +547,198 @@ async function run() {
   console.log(
     "PASS: automatic reply toggle, read-only scan, complete long messages, local activity log and responsive layout",
   );
+  const resumeFile = path.join(temp, "示例候选人简历.docx");
+  await fs.writeFile(resumeFile, Buffer.from(fixtures.RESUME_DOCX, "base64"));
+  await desktop.evaluate(
+    ({ dialog }, { file, profile }) => {
+      globalThis.inboxTestMode = false;
+      globalThis.replyTestMode = false;
+      globalThis.greetingTestMode = true;
+      globalThis.resumeTestProfile = profile;
+      const original = dialog.showOpenDialog;
+      dialog.showOpenDialog = async (_window, options) => {
+        if (options.title !== "上传简历") throw Error("Unexpected file picker");
+        dialog.showOpenDialog = original;
+        return { canceled: false, filePaths: [file] };
+      };
+    },
+    { file: resumeFile, profile: fixtures.RESUME_PROFILE },
+  );
+  const requestsBeforeResume = (
+    await desktop.evaluate(() => globalThis.llmRequests)
+  ).length;
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "个人简历", exact: true })
+    .click();
+  await page.getByRole("button", { name: "上传简历", exact: true }).click();
+  await until(
+    async () =>
+      (await snapshot()).resume.document?.source_name === "示例候选人简历.docx",
+  );
+  await until(
+    async () =>
+      (await page.getByLabel("简历正文", { exact: true }).inputValue()) ===
+      fixtures.RESUME_TEXT,
+  );
+  assert.equal(
+    (await desktop.evaluate(() => globalThis.llmRequests)).length,
+    requestsBeforeResume,
+    "Importing only extracts locally",
+  );
+  await page.getByRole("button", { name: "分析简历", exact: true }).click();
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.resume.document?.profile ? s : false;
+  });
+  assert.deepEqual(state.resume.document.profile, fixtures.RESUME_PROFILE);
+  assert.equal(state.attemptsToday, 6);
+  await page
+    .getByLabel("核心技能", { exact: true })
+    .fill("Python\nSQL 数据分析");
+  await page.getByRole("button", { name: "保存特点", exact: true }).click();
+  await until(
+    async () =>
+      (await snapshot()).resume.document.profile.skills[1] === "SQL 数据分析",
+  );
+  assert.ok(
+    !(
+      await fs.readFile(path.join(temp, "state", "desktop.yaml"), "utf8")
+    ).includes(fixtures.RESUME_TEXT),
+  );
+  await page.reload();
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "个人简历", exact: true })
+    .click();
+  assert.equal(
+    await page.getByLabel("核心技能", { exact: true }).inputValue(),
+    "Python\nSQL 数据分析",
+  );
+  for (const width of [1080, 1360]) {
+    await desktop.evaluate(
+      ({ BaseWindow }, width) =>
+        BaseWindow.getAllWindows()[0].setContentSize(width, 940),
+      width,
+    );
+    await until(() =>
+      page.evaluate(
+        (width) =>
+          innerWidth === width &&
+          document.documentElement.scrollWidth <= innerWidth,
+        width,
+      ),
+    );
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({
+      path: path.join(output, `desktop-resume-${width}-ui.png`),
+    });
+    await page
+      .getByRole("button", { name: "使用 AI 岗位招呼", exact: true })
+      .scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: path.join(output, `desktop-resume-${width}-bottom-ui.png`),
+    });
+  }
+  await page
+    .getByRole("button", { name: "使用 AI 岗位招呼", exact: true })
+    .click();
+  await page.getByLabel("沟通方式", { exact: true }).selectOption("ai");
+  const instructions =
+    "突出知识库问答项目与当前岗位的联系，语气自然，邀请进一步交流。";
+  await page.getByLabel("AI 招呼要求", { exact: true }).fill(instructions);
+  await page.getByLabel("预览岗位", { exact: true }).selectOption("ui001");
+  await page.getByRole("button", { name: "生成招呼预览", exact: true }).click();
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.resume.greeting ? s : false;
+  });
+  assert.equal(
+    state.run.status,
+    "completed",
+    JSON.stringify(state.resume.state),
+  );
+  assert.equal(state.resume.greeting.job.job_id, "ui001");
+  assert.equal(state.attemptsToday, 6);
+  const resumeRequests = (
+    await desktop.evaluate(() => globalThis.llmRequests)
+  ).slice(requestsBeforeResume);
+  assert.equal(resumeRequests.length, 2);
+  assert.equal(
+    JSON.parse(resumeRequests[0].messages.at(-1).content).resumeText,
+    fixtures.RESUME_TEXT,
+  );
+  const greetingInput = JSON.parse(resumeRequests[1].messages.at(-1).content);
+  assert.equal(greetingInput.resume.profile.skills[1], "SQL 数据分析");
+  assert.equal(greetingInput.job.description, "Python 大模型应用开发");
+  assert.equal(greetingInput.greetingInstructions, instructions);
+  assert.ok(resumeRequests.every((request) => !("max_tokens" in request)));
+  await page
+    .getByText(state.resume.greeting.message, { exact: true })
+    .waitFor();
+  for (const width of [1080, 1360]) {
+    await desktop.evaluate(
+      ({ BaseWindow }, width) =>
+        BaseWindow.getAllWindows()[0].setContentSize(width, 940),
+      width,
+    );
+    await until(() =>
+      page.evaluate(
+        (width) =>
+          innerWidth === width &&
+          document.documentElement.scrollWidth <= innerWidth,
+        width,
+      ),
+    );
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({
+      path: path.join(output, `desktop-ai-greeting-${width}-ui.png`),
+    });
+    await page.locator(".greeting-preview").scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: path.join(output, `desktop-ai-greeting-${width}-bottom-ui.png`),
+    });
+  }
+  await page.getByLabel("预览岗位", { exact: true }).selectOption("ui002");
+  await page
+    .getByText("岗位或配置已变化，请重新生成预览。", { exact: true })
+    .waitFor();
+  await page.getByRole("button", { name: "开始投递", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByText("AI 岗位招呼", { exact: true })
+    .waitFor();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "返回修改", exact: true })
+    .click();
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "个人简历", exact: true })
+    .click();
+  await page
+    .getByLabel("简历正文", { exact: true })
+    .fill(fixtures.RESUME_TEXT + "\n新增经历：客服知识库。 ");
+  await page.getByRole("button", { name: "保存正文", exact: true }).click();
+  await until(async () => (await snapshot()).resume.document.profile === null);
+  assert.equal((await snapshot()).resume.greeting, null);
+  await page.getByRole("button", { name: "移除简历", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认移除", exact: true })
+    .click();
+  await until(async () => !(await snapshot()).resume.document);
+  await assert.rejects(
+    fs.stat(path.join(temp, "state", "resume.json")),
+    /ENOENT/,
+  );
+  assert.ok(
+    (await fs.stat(resumeFile)).isFile(),
+    "Removing imported data preserves the original file",
+  );
+  console.log(
+    "PASS: native resume picker, local import, editable analysis, persistent facts, job-specific preview, stale preview and remove flow",
+  );
   await page
     .locator("nav")
     .getByRole("button", { name: "模型与人格", exact: true })
@@ -563,6 +761,8 @@ async function run() {
         pageFitsWidth: true,
         llmDraftAndReply: true,
         automaticReplies: 2,
+        resumeUploadAndAnalysis: true,
+        jobSpecificGreetingPreview: true,
       },
       null,
       2,
@@ -576,6 +776,13 @@ async function run() {
 }
 run().catch(async (error) => {
   console.error(error);
+  try {
+    if (page)
+      await page.screenshot({
+        path: path.join(root, "artifacts/desktop-failed-ui.png"),
+        fullPage: true,
+      });
+  } catch {}
   try {
     if (page)
       await page.evaluate(() => window.desk.control({ action: "stop" }));

@@ -28,11 +28,14 @@ import {
   Filter,
   Save,
   MessageSquare,
+  FileText,
 } from "lucide-react";
 import "./style.css";
 import BrowserPanel from "./BrowserPanel.jsx";
 import AISettings from "./AISettings.jsx";
 import RepliesPanel from "./RepliesPanel.jsx";
+import ResumePanel from "./ResumePanel.jsx";
+import GreetingPanel from "./GreetingPanel.jsx";
 
 const api = window.desk;
 const pacePresets = {
@@ -56,6 +59,8 @@ const pacePresets = {
   },
 };
 const labels = {
+  resume_analyze: "分析简历",
+  greeting_preview: "预览招呼",
   starting: "准备中",
   running: "运行中",
   paused: "已暂停",
@@ -237,10 +242,14 @@ function App() {
     locked = busy || active;
   const dirty =
     draft && state && JSON.stringify(draft) !== JSON.stringify(state.config);
+  const greetingBlocked =
+    draft?.message.mode === "ai" &&
+    (!state?.resume?.document?.profile || !state?.llm?.configured);
   const nav = [
     ["workspace", LayoutDashboard, "任务工作台"],
     ["browser", Monitor, "BOSS 浏览器"],
     ["replies", MessageSquare, "消息回复"],
+    ["resume", FileText, "个人简历"],
     ["models", Sparkles, "模型与人格"],
     ["history", History, "投递记录"],
     ["logs", ScrollText, "运行日志"],
@@ -364,6 +373,19 @@ function App() {
                   onReplies={() => setPage("replies")}
                 />
               )}
+              {page === "resume" && (
+                <ResumePanel
+                  state={state}
+                  locked={locked || state.autoReply?.enabled}
+                  act={act}
+                  saveModel={saveModel}
+                  onModels={() => setPage("models")}
+                  onGreeting={() => {
+                    update("message", "mode", "ai");
+                    setPage("workspace");
+                  }}
+                />
+              )}
               {page === "replies" && (
                 <RepliesPanel
                   state={state}
@@ -448,7 +470,7 @@ function App() {
                           <Button
                             icon={Play}
                             className="primary"
-                            disabled={busy}
+                            disabled={busy || greetingBlocked}
                             onClick={() => setConfirm(true)}
                           >
                             开始投递
@@ -781,68 +803,17 @@ function App() {
                         </details>
                       </fieldset>
                     </section>
-                    <section className="panel message-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <Send size={18} />
-                          <h2>打招呼内容</h2>
-                        </div>
-                      </div>
-                      <fieldset disabled={locked}>
-                        <Field label="沟通方式">
-                          <select
-                            value={draft.message.mode}
-                            onChange={(e) =>
-                              update("message", "mode", e.target.value)
-                            }
-                          >
-                            <option value="custom">发送自定义招呼</option>
-                            <option value="platform">仅建立平台沟通</option>
-                          </select>
-                        </Field>
-                        <textarea
-                          className="message-input"
-                          disabled={locked || draft.message.mode !== "custom"}
-                          value={draft.message.template}
-                          maxLength={1000}
-                          onChange={(e) =>
-                            update("message", "template", e.target.value)
-                          }
-                          aria-label="打招呼模板"
-                        />
-                        <div className="variables">
-                          插入变量{" "}
-                          {["title", "company", "city", "recruiter"].map(
-                            (v, i) => (
-                              <button
-                                key={v}
-                                type="button"
-                                disabled={locked}
-                                onClick={() =>
-                                  update(
-                                    "message",
-                                    "template",
-                                    draft.message.template + `{${v}}`,
-                                  )
-                                }
-                              >
-                                {["职位", "公司", "城市", "招聘者"][i]}
-                              </button>
-                            ),
-                          )}
-                        </div>
-                      </fieldset>
-                      <div className="message-preview">
-                        <span>
-                          <Sparkles size={13} /> 预览
-                        </span>
-                        <p>
-                          {draft.message.mode === "custom"
-                            ? template
-                            : "仅建立平台沟通，不发送模板。"}
-                        </p>
-                      </div>
-                    </section>
+                    <GreetingPanel
+                      config={draft.message}
+                      state={state}
+                      locked={locked || state.autoReply?.enabled}
+                      update={(key, value) => update("message", key, value)}
+                      template={template}
+                      save={save}
+                      act={act}
+                      onResume={() => setPage("resume")}
+                      onModels={() => setPage("models")}
+                    />
                   </div>
                   <section className="panel limits">
                     <div className="panel-heading">
@@ -1147,7 +1118,7 @@ function App() {
                       </div>
                       <div>
                         <h3>配置迁移</h3>
-                        <p>不含登录状态、记录和密钥</p>
+                        <p>不含登录状态、记录、密钥和简历</p>
                       </div>
                       <Button
                         icon={Upload}
@@ -1297,20 +1268,30 @@ function App() {
               <dd>
                 {draft.message.mode === "custom"
                   ? "自定义招呼"
-                  : "仅建立平台沟通"}
+                  : draft.message.mode === "ai"
+                    ? "AI 岗位招呼"
+                    : "仅建立平台沟通"}
               </dd>
+              {draft.message.mode === "ai" && (
+                <>
+                  <dt>个人简历</dt>
+                  <dd>{state.resume?.document?.source_name || "尚未分析"}</dd>
+                </>
+              )}
             </dl>
             <div className="confirm-message">
               {draft.message.mode === "custom"
                 ? template
-                : "仅建立沟通，不发送自定义模板。"}
+                : draft.message.mode === "ai"
+                  ? "按各岗位详情结合简历生成招呼。简历正文、特点和职位资料将发送至 DeepSeek；生成失败时停止。"
+                  : "仅建立沟通，不发送自定义模板。"}
             </div>
             <div className="modal-actions">
               <Button onClick={() => setConfirm(false)}>返回修改</Button>
               <Button
                 className="primary"
                 icon={Send}
-                disabled={busy}
+                disabled={busy || greetingBlocked}
                 onClick={() => start("send")}
               >
                 {busy ? "正在启动…" : "确认开始"}

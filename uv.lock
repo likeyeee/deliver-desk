@@ -31,13 +31,14 @@ wheels = [
 
 [[package]]
 name = "boss-job-cli"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "filelock" },
     { name = "platformdirs" },
     { name = "playwright" },
     { name = "pydantic" },
+    { name = "pypdf" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "typer" },
@@ -57,6 +58,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.3,<5" },
     { name = "playwright", specifier = ">=1.49,<2" },
     { name = "pydantic", specifier = ">=2.10,<3" },
+    { name = "pypdf", specifier = ">=6,<7" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "rich", specifier = ">=13.9,<15" },
     { name = "typer", specifier = ">=0.15,<1" },
@@ -438,6 +440,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/26/60/d881fa1ba8c160c18d8e6f782bb16ec4640c08bc08fc50f704c368ad4f9e/pyinstaller_hooks_contrib-2026.7.tar.gz", hash = "sha256:5fbcaacb22c4f4aac869a127dce283f67a4b4cfcc37d496f2446603e6d68aefa", size = 175992, upload-time = "2026-08-24T21:26:58.713Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/67/350377af7b50416344ab8792756d414eef7629c618a73e9a0b13bb1552d9/pyinstaller_hooks_contrib-2026.7-py3-none-any.whl", hash = "sha256:24257a04c7a5a7a034cf28e39dcee20fbeeb9f043076729480f2e1b69904408a", size = 459445, upload-time = "2026-08-24T21:26:57.274Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "6.18.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/c3/9fa0666f280552bd3833562d985b785fce1ddb3804937edd2fd6a3f2bdb3/pypdf-6.18.0.tar.gz", hash = "sha256:ae58b7d93c22c169ffb02c3b06321c45c4f223b4916536568adb57d789d95d01", size = 7024871, upload-time = "2026-09-07T16:48:16.444Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/a5/d5922a078c9a612327681d4793404f82998f4d66213add6fdc0659245856/pypdf-6.18.0-py3-none-any.whl", hash = "sha256:05b762b77bcb9dcb4a7c91fcf5dded585b25bee7269ab3d3001d7c55fa1b324b", size = 393848, upload-time = "2026-09-07T16:48:14.254Z" },
 ]
 
 [[package]]

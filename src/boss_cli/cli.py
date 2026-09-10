@@ -142,6 +142,8 @@ def preview(
 
 
 def send_confirmation(cfg: Config, yes: bool):
+    if cfg.message.mode == "ai":
+        raise typer.BadParameter("AI 岗位招呼请在桌面端上传并分析简历后运行")
     console.print(
         f"发送范围：{', '.join(cfg.search.keywords)}；{cfg.search.city}；网站筛选 {cfg.search.filters}。",
         markup=False,

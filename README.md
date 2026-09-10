@@ -3,7 +3,7 @@
 [![CI](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/likeyeee/deliver-desk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/likeyeee/deliver-desk?include_prereleases)](https://github.com/likeyeee/deliver-desk/releases)
 
-本地运行的 BOSS 直聘求职工作台：筛选职位、发起沟通、核对送达、管理历史，也可用 DeepSeek 自动监控未回复消息并按个人提示词回复。
+本地运行的 BOSS 直聘求职工作台：筛选职位、分析个人简历、按岗位生成招呼、核对送达、管理历史，也可用 DeepSeek 自动回复招聘方消息。
 
 ![投递工作台界面，使用示例数据](docs/assets/workspace.png)
 
@@ -11,8 +11,8 @@
 
 | 系统                  | 安装包                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- |
-| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.5.1/DeliverDesk-0.5.1-mac-arm64.dmg)   |
-| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.5.1/DeliverDesk-0.5.1-win-x64.exe) |
+| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.6.0/DeliverDesk-0.6.0-mac-arm64.dmg)   |
+| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.6.0/DeliverDesk-0.6.0-win-x64.exe) |
 
 安装包自带运行环境。当前为未签名测试版；[安装说明与验证范围](docs/desktop-guide.md)。
 
@@ -24,7 +24,9 @@
 4. 在 **投递记录** 查看结果、只读核对送达，或导出 CSV。
 5. 在 **模型与人格** 配置 DeepSeek 和系统提示词，再到 **消息回复** 开启 **自动回复**，或读取会话、编辑草稿后手动确认发送。[使用说明](docs/llm-replies.md)
 
-历史去重跨重启保留；无法确认的发送不会自动重试。登录和记录保存在本机；手动生成或开启自动回复后，需要回复的会话近期消息和人格提示词会发送给 DeepSeek。自动回复默认关闭，退出应用后停止。“投递”指发起沟通，不自动上传简历附件。
+要使用个性化招呼：在 **个人简历** 上传 PDF、DOCX、TXT 或粘贴正文，点击 **分析简历**，核对并保存个人特点；回到工作台选择 **AI 岗位招呼**，每个岗位会结合职位详情和你的经历单独生成。可先选择已发现的岗位生成预览。[简历与岗位招呼](docs/resume-greetings.md)
+
+历史去重跨重启保留；无法确认的发送不会自动重试。简历导入仅在本机解析，分析和生成岗位招呼时会将正文及相关资料发送给 DeepSeek；生成回复时会发送近期会话和人格提示词。自动回复默认关闭，退出应用后停止。“投递”指发起沟通，导入的简历用于生成招呼，不自动作为附件发给招聘方。
 
 ## 开发
 
@@ -57,17 +59,11 @@ docs/           使用、架构、适配与发布记录
 
 ## 最新更新
 
-### 2026-09-09
+### 2026-09-10
 
-- 界面改用功能名称，移除宣传标语、重复说明和页脚，精简操作提示。
-- 消息回复页新增自动回复开关：检查招聘方发来且尚未回复的消息，包含已读会话，并保留发现、生成、发送和失败日志。
-- 扫描会等待消息页与会话资料加载完整，首次打开应用也可直接检查待回复消息。
-- 移除回复的 Token 参数和 1,000 字上限，保留完整正文；模型返回截断内容时停止发送。
-- 新增 DeepSeek 模型配置、自定义人格提示词和可编辑回复草稿，确认后发送并核对送达。
-- 修复同公司多招聘者导致未发送文字的问题；浏览器铺满窗口，网页宽度自动适配。
-- 修复有未读消息时停在简易聊天弹窗的问题，可继续进入完整会话并核对送达。
-- 修复发送按钮遮挡、聊天页反复闪跳，以及切到日志后偶发点击无响应的问题。
-- 浏览器嵌入主窗口，扫码、职位和聊天页面统一显示；开始任务后自动切换。
-- 自定义每轮 1–200 次投递，显示目标进度、每日余额和提前结束原因。
+- 新增个人简历：上传 PDF、DOCX、TXT 或粘贴正文，使用 DeepSeek 提取个人概况、技能、代表经历和岗位优势，支持校对与编辑。
+- 新增 AI 岗位招呼：结合每个岗位的具体要求和个人经历生成招呼，可设置表达要求并先预览，投递时按最新职位详情重新生成。
+- 简历和分析结果保存在本机，不随配置导出；修改正文后需重新分析，也可移除本地简历。
+- 保留完整生成正文；生成失败或模型返回截断内容时停止，不发起沟通。
 
 [完整发布记录](docs/releases/release-notes.md)

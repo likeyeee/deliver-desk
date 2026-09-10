@@ -32,7 +32,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --python 3.12
       - run: npm ci --no-audit --no-fund
-      - run: uv run pytest tests/test_config_matching.py tests/test_storage_runner.py tests/test_desktop_service.py -q
+      - run: uv run pytest tests/test_config_matching.py tests/test_storage_runner.py tests/test_desktop_service.py tests/test_resume.py -q
       - run: npm run build:ui
       - run: npm run test:desktop
       - run: npm run test:ui

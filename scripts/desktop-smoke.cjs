@@ -116,6 +116,11 @@ app
             );
       if (route.includes("/chat") || detailId)
         html = html.replaceAll("abc123", fixtureJob);
+      if (detailId && fixtureJob.startsWith("ai"))
+        html = html.replace(
+          "Python 大模型应用开发",
+          `Python 大模型应用开发 · ${fixtureJob} 专属要求`,
+        );
       if (route.includes("/chat") && replyFixture)
         html = html.replace(
           'id="messages">',
@@ -700,6 +705,125 @@ app
     console.log(
       "PASS: native inbox scan, read-but-unanswered messages, full automatic replies, timer, audit and dedup",
     );
+    inboxFixture = false;
+    replyFixture = false;
+    for (const format of ["PDF", "DOCX", "TXT"]) {
+      const file = path.join(temp, `示例简历.${format.toLowerCase()}`);
+      await fs.writeFile(
+        file,
+        format === "TXT"
+          ? fixtures.RESUME_TEXT
+          : Buffer.from(fixtures[`RESUME_${format}`], "base64"),
+      );
+      const imported = await backend.request("resume", {
+        action: "import",
+        path: file,
+      });
+      assert.match(imported.document.text, /Python/);
+      if (format !== "PDF")
+        assert.equal(imported.document.text, fixtures.RESUME_TEXT);
+      assert.equal(imported.document.profile, null);
+    }
+    const greetingCalls = [];
+    const greetingFor = (job) =>
+      `您好，关于${job.title}（${job.job_id}），` +
+      "我有知识库项目的需求分析与效果评估经验。".repeat(65) +
+      "期待进一步交流。";
+    backend.llm.analyzeResume = async (_id, params) => {
+      assert.equal(params.text, fixtures.RESUME_TEXT);
+      return { profile: fixtures.RESUME_PROFILE };
+    };
+    backend.llm.generateGreeting = async (_id, params) => {
+      greetingCalls.push(params);
+      assert.deepEqual(params.resume.profile, fixtures.RESUME_PROFILE);
+      assert.equal(params.resume.text, fixtures.RESUME_TEXT);
+      return { message: greetingFor(params.job) };
+    };
+    state = await backend.request("snapshot");
+    await backend.request("resume", {
+      action: "analyze",
+      revision: state.resume.document.revision,
+    });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    });
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.resume.state),
+    );
+    assert.deepEqual(state.resume.document.profile, fixtures.RESUME_PROFILE);
+    await backend.request("resume", {
+      action: "previewGreeting",
+      revision: state.resume.document.revision,
+      jobId: "batch003",
+    });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    });
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.resume.state),
+    );
+    assert.equal(
+      state.resume.greeting.message,
+      greetingFor(state.resume.greeting.job),
+    );
+    assert.equal(
+      state.attemptsToday,
+      8,
+      "Resume analysis and greeting previews never reserve or send",
+    );
+    fixtureJobs = ["ai001", "ai002"];
+    config.message.mode = "ai";
+    config.search.max_jobs = 2;
+    config.run.max_sends = 2;
+    await backend.request("saveConfig", { config });
+    await backend.request("start", { mode: "send" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 60000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.events.slice(-8)),
+    );
+    assert.equal(state.run.sent, 2);
+    assert.equal(state.attemptsToday, 10);
+    assert.equal(greetingCalls.length, 3);
+    for (const id of fixtureJobs) {
+      const call = greetingCalls.find((item) => item.job.job_id === id);
+      assert.ok(call.job.description.includes(`${id} 专属要求`));
+      const delivery = state.history.find((item) => item.job_id === id);
+      assert.equal(delivery.status, "sent");
+      assert.equal(delivery.message, greetingFor(call.job));
+      assert.ok(delivery.message.length > 1000);
+    }
+    fixtureJobs = ["aifail"];
+    backend.llm.generateGreeting = async () => {
+      throw Error("DeepSeek 测试生成失败");
+    };
+    const requestsBeforeFailure = requests.length;
+    await backend.request("start", { mode: "send" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    });
+    assert.equal(state.run.status, "needs_attention");
+    assert.equal(state.attemptsToday, 10);
+    assert.ok(!state.history.some((item) => item.job_id === "aifail"));
+    assert.ok(
+      !requests
+        .slice(requestsBeforeFailure)
+        .some((url) => url.includes("/chat")),
+    );
+    console.log(
+      "PASS: PDF/DOCX/TXT import, private resume analysis, zero-send preview, per-job AI greetings, full native receipts and model failure before contact",
+    );
     await backend.close();
     browser.destroy();
     host.destroy();
@@ -717,6 +841,8 @@ app
           batchSeconds,
           llmDraftAndReply: true,
           automaticReplies: 2,
+          resumeFormats: ["pdf", "docx", "txt"],
+          aiGreetings: 2,
         },
         null,
         2,

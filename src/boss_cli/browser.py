@@ -774,7 +774,7 @@ class BossAdapter:
                     chat_ready = True
                     chat_page = page
             if (
-                self.config.message.mode == "custom"
+                self.config.message.mode != "platform"
                 and contact_confirmed
                 and not chat_ready
                 and "/job_detail/" in self.detail.url
@@ -791,7 +791,7 @@ class BossAdapter:
                 chat_ready = True
             if (
                 self.config.message.mode == "platform" and (contact_confirmed or message_confirmed)
-            ) or (self.config.message.mode == "custom" and chat_ready):
+            ) or (self.config.message.mode != "platform" and chat_ready):
                 break
             await self.control.sleep(0.3)
         if not contact_confirmed and not message_confirmed:

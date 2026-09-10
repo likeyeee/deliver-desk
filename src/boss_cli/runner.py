@@ -28,10 +28,12 @@ class Runner:
         *,
         send: bool,
         console: Console | None = None,
+        greeting=None,
     ):
         self.config, self.store, self.run_id, self.send = config, store, run_id, send
         self.control = Controller(store, run_id)
         self.console = console
+        self.greeting = greeting
         self.counts = {"scanned": 0, "matched": 0, "sent": 0, "skipped": 0, "errors": 0}
         self.attempts = 0
         self.reserved_job: str | None = None
@@ -77,11 +79,21 @@ class Runner:
             self.skip(job, reason)
             return
         self.counts["matched"] += 1
-        message = (
-            render_message(self.config.message, job)
-            if self.config.message.mode == "custom"
-            else "[仅发起平台沟通；不发送配置模板]"
-        )
+        if self.config.message.mode == "ai":
+            if self.send:
+                if not self.greeting:
+                    raise NeedsAttention("AI 岗位招呼请在桌面端上传并分析简历后运行")
+                message = await self.greeting(job=job, control=self.control)
+                if not isinstance(message, str) or not message.strip():
+                    raise NeedsAttention("AI 未返回有效的岗位招呼，未发起沟通")
+            else:
+                message = "[AI 岗位招呼：投递前结合此职位与简历生成，可在工作台单独预览]"
+        else:
+            message = (
+                render_message(self.config.message, job)
+                if self.config.message.mode == "custom"
+                else "[仅发起平台沟通；不发送配置模板]"
+            )
         self.log(
             "candidate",
             f"{job.company} · {job.title} · {readable_salary(job.salary)}\n  {job.url}\n  {message}",
@@ -193,6 +205,7 @@ async def run_task(
     run_id: str | None = None,
     console: Console | None = None,
     factory=BrowserSession,
+    greeting=None,
 ) -> dict:
     run_id = run_id or uuid.uuid4().hex[:12]
     private_dir(directory)
@@ -201,7 +214,9 @@ async def run_task(
         with task_lock(directory):
             store.recover()
             store.create_run(run_id, mode)
-            runner = Runner(config, store, run_id, send=mode == "send", console=console)
+            runner = Runner(
+                config, store, run_id, send=mode == "send", console=console, greeting=greeting
+            )
             loop = asyncio.get_running_loop()
             previous_signals = {}
             for sig in (signal.SIGINT, signal.SIGTERM):

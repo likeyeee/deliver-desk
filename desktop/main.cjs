@@ -132,7 +132,17 @@ else {
         dialog.showErrorBox("任务服务未启动", error.message),
       );
       for (const name of serviceCommands)
-        handle(name, (params) => backend.request(name, params));
+        handle(name, async (params) => {
+          if (name === "start" && params.mode === "send") {
+            const state = await backend.request("snapshot");
+            if (
+              state.config.message.mode === "ai" &&
+              !vault.status().configured
+            )
+              throw Error("请先在模型与人格中保存 DeepSeek API Key");
+          }
+          return backend.request(name, params);
+        });
       handle("snapshot", async () => ({
         ...(await backend.request("snapshot")),
         browser: await browser.status(),
@@ -147,6 +157,29 @@ else {
         if (action === "removeKey") return vault.remove();
         if (action === "test") return llm.test();
         throw Error("无效的模型配置操作");
+      });
+      handle("resume", async (params) => {
+        const state = await backend.request("snapshot");
+        if (state.active || state.autoReply?.enabled)
+          throw Error("请先停止当前任务和自动回复，再处理简历");
+        if (params.action === "import") {
+          const { filePaths, canceled } = await dialog.showOpenDialog(window, {
+            title: "上传简历",
+            properties: ["openFile"],
+            filters: [{ name: "简历文件", extensions: ["pdf", "docx", "txt"] }],
+          });
+          if (canceled || !filePaths.length) return null;
+          return backend.request("resume", {
+            action: "import",
+            path: filePaths[0],
+          });
+        }
+        if (
+          ["analyze", "previewGreeting"].includes(params.action) &&
+          !vault.status().configured
+        )
+          throw Error("请先在模型与人格中保存 DeepSeek API Key");
+        return backend.request("resume", params);
       });
       handle("autoReply", async (params) => {
         if (params.action === "enable" && !vault.status().configured)

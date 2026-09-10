@@ -42,6 +42,7 @@ blocked = {
     "login.png",
     "desktop.yaml",
     "deepseek-key.enc",
+    "resume.json",
     "real-history.csv",
 }
 audits = []

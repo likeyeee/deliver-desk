@@ -35,6 +35,11 @@ app
       工作经验: "1-3年",
       学历要求: "本科",
     };
+    const fixtures = JSON.parse(
+      execFileSync(python, [path.join(root, "scripts/export_fixtures.py")], {
+        encoding: "utf8",
+      }),
+    );
     const state = {
       config,
       active: false,
@@ -53,6 +58,19 @@ app
       directory: "示例数据",
       version: require("../package.json").version,
       browser: { loggedIn: true },
+      llm: { configured: true, secureStorage: true },
+      resume: {
+        document: {
+          source_name: "示例候选人简历.docx",
+          text: fixtures.RESUME_TEXT,
+          profile: fixtures.RESUME_PROFILE,
+          profile_model: config.llm.model,
+          analyzed_at: "2026-09-10T10:00:00+08:00",
+          revision: "example-resume",
+        },
+        state: { status: "ready", note: "简历特点已保存" },
+        greeting: null,
+      },
       jobs: [
         {
           job_id: "demo1",
@@ -107,17 +125,50 @@ app
       }, 50);
     });
   `);
-    const height = await window.webContents.executeJavaScript(
-      "document.documentElement.scrollHeight",
+    async function capture(name) {
+      const height = await window.webContents.executeJavaScript(
+        "document.documentElement.scrollHeight",
+      );
+      window.setContentSize(1360, height);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const screenshot = await window.webContents.capturePage();
+      const target = path.join(root, "docs/assets", name + ".png");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, screenshot.resize({ width: 1360 }).toPNG());
+    }
+    await capture("workspace");
+    window.setContentSize(1360, 940);
+    await window.webContents.executeJavaScript(
+      "[...document.querySelectorAll('nav button')].find(button => button.textContent === '个人简历').click()",
     );
-    window.setContentSize(1360, height);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    const screenshot = await window.webContents.capturePage();
-    const target = path.join(root, "docs/assets/workspace.png");
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, screenshot.resize({ width: 1360 }).toPNG());
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await capture("resume");
+    config.message.mode = "ai";
+    state.resume.greeting = {
+      job: state.jobs[0],
+      message:
+        "您好，看到贵公司的 AI 应用工程师岗位。我曾负责知识库问答项目的需求分析与效果评估，掌握 Python、SQL，希望结合这些经历参与岗位工作，期待进一步交流。",
+      model: config.llm.model,
+      resumeRevision: "example-resume",
+      instructions: config.message.instructions,
+    };
+    window.setContentSize(1360, 940);
+    await window.loadFile(path.join(root, "ui-dist/index.html"));
+    await window.webContents
+      .executeJavaScript(`new Promise((resolve, reject) => {
+      const end = Date.now() + 10000;
+      const timer = setInterval(() => {
+        const select = document.querySelector('select[aria-label="预览岗位"]');
+        if (select) { clearInterval(timer); select.value='demo1'; select.dispatchEvent(new Event('change', { bubbles: true })); resolve(); }
+        else if (Date.now() > end) { clearInterval(timer); reject(Error('Greeting preview failed to render')); }
+      }, 50);
+    });`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await capture("ai-greeting");
     window.destroy();
-    console.log("Created docs/assets/workspace.png from synthetic data");
+    console.log(
+      "Created workspace, resume and AI greeting screenshots from synthetic data",
+    );
     app.quit();
   })
   .catch((error) => {

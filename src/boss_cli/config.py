@@ -100,9 +100,13 @@ class MatchConfig(StrictModel):
 
 
 class MessageConfig(StrictModel):
-    mode: Literal["platform", "custom"] = "custom"
+    mode: Literal["platform", "custom", "ai"] = "custom"
     template: str = (
         "您好，我对贵公司的{title}岗位很感兴趣，希望进一步了解岗位要求和团队情况，方便交流吗？"
+    )
+    instructions: str = Field(
+        default="结合这个岗位最相关的真实经历或技能，简洁说明匹配点，表达应聘意愿并邀请交流。",
+        max_length=4000,
     )
 
     @field_validator("template")

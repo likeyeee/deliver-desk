@@ -96,12 +96,17 @@ class Backend extends EventEmitter {
       }
     } else if (data.kind === "llm") {
       try {
-        if (data.method !== "generate" || !this.llm)
+        if (
+          !["generate", "analyzeResume", "generateGreeting"].includes(
+            data.method,
+          ) ||
+          !this.llm
+        )
           throw Error("模型服务不可用");
         this.send({
           kind: "llmReply",
           id: data.id,
-          result: await this.llm.generate(data.id, data.params),
+          result: await this.llm[data.method](data.id, data.params),
         });
       } catch (error) {
         this.send({ kind: "llmReply", id: data.id, error: error.message });
