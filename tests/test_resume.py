@@ -139,6 +139,7 @@ def test_analysis_revision_edits_reload_and_clear(store):
         ("large.txt", b"x" * (60001), "60,000"),
         ("huge.txt", b"x" * (10 * 1024 * 1024 + 1), "10 MB"),
     ],
+    ids=["legacy-doc", "empty-text", "text-limit", "file-limit"],
 )
 def test_unsupported_empty_and_large_resume_are_rejected(tmp_path, filename, content, match):
     file = tmp_path / filename

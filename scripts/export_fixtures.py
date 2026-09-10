@@ -19,9 +19,7 @@ fixtures = {
     and isinstance(node.targets[0], ast.Name)
     and node.targets[0].id.endswith("_HTML")
 }
-resume_text = (
-    "示例候选人\n2023—2025 年负责知识库问答项目的需求分析与效果评估。\n核心技能：Python、SQL。"
-)
+resume_text = "示例候选人\n2023—2025 年担任产品经理，负责知识库问答项目的需求分析与效果评估。\n核心技能：Python、SQL。"
 fixtures["RESUME_TEXT"] = resume_text
 fixtures["RESUME_PROFILE"] = {
     "summary": "有知识库问答项目经验的产品经理",
