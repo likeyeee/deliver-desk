@@ -10,6 +10,7 @@ const commands = [
   "autoReply",
   "llm",
   "resume",
+  "greetings",
   "openBrowser",
   "browserViewport",
   "browserTab",

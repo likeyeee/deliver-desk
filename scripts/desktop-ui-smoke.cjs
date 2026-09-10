@@ -87,7 +87,7 @@ async function run() {
             ? fixtures.DETAIL_COMPOSER_HTML
             : fixtures.LIST_HTML.replace(
                 /<ul class="results">[\s\S]*?<\/ul>\s*<aside>/,
-                `<ul class="results">${["ui001", "ui002", "ui003", "ui004"].map((id) => card.replaceAll("abc123", id)).join("")}</ul><aside>`,
+                `<ul class="results">${(globalThis.greetingTestMode ? ["greet001", "greet002"] : ["ui001", "ui002", "ui003", "ui004"]).map((id) => card.replaceAll("abc123", id)).join("")}</ul><aside>`,
               );
         if (!route.includes("/chat") && !detail)
           html = html.replace(
@@ -96,6 +96,11 @@ async function run() {
           );
         if (route.includes("/chat") || detail)
           html = html.replaceAll("abc123", current);
+        if (detail && globalThis.greetingTestMode)
+          html = html.replace(
+            "Python 大模型应用开发",
+            `Python 大模型应用开发 · ${current} 专属要求`,
+          );
         if (route.includes("/chat") && globalThis.replyTestMode)
           html = html.replace(
             'id="messages">',
@@ -432,7 +437,11 @@ async function run() {
                   body.response_format?.type === "json_object"
                     ? JSON.stringify(globalThis.resumeTestProfile)
                     : globalThis.greetingTestMode
-                      ? `您好，看到贵公司的${JSON.parse(body.messages.at(-1).content).job.title}岗位。我曾负责知识库问答项目的需求分析与效果评估，掌握 Python、SQL，希望结合这些经历参与岗位工作，期待进一步交流。`
+                      ? `您好，关于${JSON.parse(body.messages.at(-1).content).job.description}。` +
+                        "我曾负责知识库问答项目的需求分析与效果评估。".repeat(
+                          65,
+                        ) +
+                        "期待进一步交流。"
                       : globalThis.inboxTestMode
                         ? "我会先明确岗位目标，再结合具体问题说明解决思路。".repeat(
                             65,
@@ -751,34 +760,88 @@ async function run() {
   const instructions =
     "突出知识库问答项目与当前岗位的联系，语气自然，邀请进一步交流。";
   await page.getByLabel("AI 招呼要求", { exact: true }).fill(instructions);
-  await page.getByLabel("预览岗位", { exact: true }).selectOption("ui001");
-  await page.getByRole("button", { name: "生成招呼预览", exact: true }).click();
+  assert.equal(await page.getByLabel("预览岗位", { exact: true }).count(), 0);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "生成招呼预览", exact: true })
+      .count(),
+    0,
+  );
+  for (const width of [1080, 1360]) {
+    await desktop.evaluate(
+      ({ BaseWindow }, width) =>
+        BaseWindow.getAllWindows()[0].setContentSize(width, 940),
+      width,
+    );
+    await until(() =>
+      page.evaluate(
+        (width) =>
+          innerWidth === width &&
+          document.documentElement.scrollWidth <= innerWidth,
+        width,
+      ),
+    );
+    await page.locator(".message-panel").scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: path.join(output, `desktop-ai-greeting-${width}-ui.png`),
+    });
+  }
+  await page.getByRole("button", { name: "预览职位", exact: true }).click();
   state = await until(async () => {
     const s = await snapshot();
-    return !s.active && s.resume.greeting ? s : false;
-  });
+    return !s.active && s.greetings.total === 2 ? s : false;
+  }, 60000);
   assert.equal(
     state.run.status,
     "completed",
-    JSON.stringify(state.resume.state),
+    JSON.stringify(state.events.slice(-8)),
   );
-  assert.equal(state.resume.greeting.job.job_id, "ui001");
   assert.equal(state.attemptsToday, 6);
+  let records = await page.evaluate(() => window.desk.greetings({}));
+  assert.equal(records.items.length, 2);
+  assert.ok(
+    records.items.every(
+      (row) => row.status === "generated" && row.delivery_status === "",
+    ),
+  );
   const resumeRequests = (
     await desktop.evaluate(() => globalThis.llmRequests)
   ).slice(requestsBeforeResume);
-  assert.equal(resumeRequests.length, 2);
+  assert.equal(resumeRequests.length, 3);
   assert.equal(
     JSON.parse(resumeRequests[0].messages.at(-1).content).resumeText,
     fixtures.RESUME_TEXT,
   );
-  const greetingInput = JSON.parse(resumeRequests[1].messages.at(-1).content);
-  assert.equal(greetingInput.resume.profile.skills[1], "SQL 数据分析");
-  assert.equal(greetingInput.job.description, "Python 大模型应用开发");
-  assert.equal(greetingInput.greetingInstructions, instructions);
+  for (const request of resumeRequests.slice(1)) {
+    const greetingInput = JSON.parse(request.messages.at(-1).content);
+    assert.equal(greetingInput.resume.profile.skills[1], "SQL 数据分析");
+    assert.match(greetingInput.job.description, /greet00[12] 专属要求/);
+    assert.equal(greetingInput.greetingInstructions, instructions);
+  }
   assert.ok(resumeRequests.every((request) => !("max_tokens" in request)));
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
   await page
-    .getByText(state.resume.greeting.message, { exact: true })
+    .locator("nav")
+    .getByRole("button", { name: "招呼记录", exact: true })
+    .click();
+  await until(async () => (await page.locator("tbody tr").count()) === 2);
+  await page
+    .getByRole("button", { name: "查看记录", exact: true })
+    .first()
+    .click();
+  const detail = await page.evaluate(
+    (id) => window.desk.greetings({ id }),
+    records.items[0].id,
+  );
+  assert.ok(detail.message.length > 1000);
+  await page
+    .getByRole("dialog")
+    .getByText(detail.message, { exact: true })
+    .waitFor();
+  await page.getByText("当时的岗位 JD", { exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByText(detail.job_json.description, { exact: true })
     .waitFor();
   for (const width of [1080, 1360]) {
     await desktop.evaluate(
@@ -794,28 +857,53 @@ async function run() {
         width,
       ),
     );
-    await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
-      path: path.join(output, `desktop-ai-greeting-${width}-ui.png`),
-    });
-    await page.locator(".greeting-preview").scrollIntoViewIfNeeded();
-    await page.screenshot({
-      path: path.join(output, `desktop-ai-greeting-${width}-bottom-ui.png`),
+      path: path.join(output, `desktop-greeting-detail-${width}-ui.png`),
     });
   }
-  await page.getByLabel("预览岗位", { exact: true }).selectOption("ui002");
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.screenshot({
+    path: path.join(output, "desktop-greeting-history-ui.png"),
+  });
   await page
-    .getByText("岗位或配置已变化，请重新生成预览。", { exact: true })
-    .waitFor();
+    .locator("nav")
+    .getByRole("button", { name: "任务工作台", exact: true })
+    .click();
   await page.getByRole("button", { name: "开始投递", exact: true }).click();
   await page
     .getByRole("dialog")
     .getByText("AI 岗位招呼", { exact: true })
     .waitFor();
+  await page.getByRole("button", { name: "确认开始", exact: true }).click();
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.greetings.total === 4 ? s : false;
+  }, 60000);
+  assert.equal(
+    state.run.status,
+    "completed",
+    JSON.stringify(state.events.slice(-8)),
+  );
+  assert.equal(state.run.sent, 2);
+  assert.equal(state.attemptsToday, 8);
+  records = await page.evaluate(() => window.desk.greetings({}));
+  assert.ok(
+    records.items
+      .slice(0, 2)
+      .every((row) => row.delivery_status === "sent" && row.reused_from),
+  );
+  assert.equal(
+    (await desktop.evaluate(() => globalThis.llmRequests)).length -
+      requestsBeforeResume,
+    3,
+  );
+  await page.reload();
   await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "返回修改", exact: true })
+    .locator("nav")
+    .getByRole("button", { name: "招呼记录", exact: true })
     .click();
+  await until(async () => (await page.locator("tbody tr").count()) === 4);
   await page
     .locator("nav")
     .getByRole("button", { name: "个人简历", exact: true })
@@ -825,7 +913,7 @@ async function run() {
     .fill(fixtures.RESUME_TEXT + "\n新增经历：客服知识库。 ");
   await page.getByRole("button", { name: "保存正文", exact: true }).click();
   await until(async () => (await snapshot()).resume.document.profile === null);
-  assert.equal((await snapshot()).resume.greeting, null);
+  assert.equal((await snapshot()).greetings.total, 4);
   await page.getByRole("button", { name: "移除简历", exact: true }).click();
   await page
     .getByRole("dialog")
@@ -840,8 +928,24 @@ async function run() {
     (await fs.stat(resumeFile)).isFile(),
     "Removing imported data preserves the original file",
   );
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "任务工作台", exact: true })
+    .click();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "预览职位", exact: true })
+      .isDisabled(),
+    true,
+  );
+  assert.equal(
+    await page
+      .getByRole("button", { name: "开始投递", exact: true })
+      .isDisabled(),
+    true,
+  );
   console.log(
-    "PASS: native resume picker, local import, editable analysis, persistent facts, job-specific preview, stale preview and remove flow",
+    "PASS: native resume picker, local import, editable analysis, persistent facts, automatic discovery and batch sending, complete greeting audit and remove flow",
   );
   await page
     .locator("nav")
@@ -866,7 +970,9 @@ async function run() {
         llmDraftAndReply: true,
         automaticReplies: 2,
         resumeUploadAndAnalysis: true,
-        jobSpecificGreetingPreview: true,
+        automaticGreetingDiscovery: 2,
+        automaticGreetingSends: 2,
+        greetingAuditRecords: 4,
       },
       null,
       2,

@@ -36,6 +36,7 @@ import AISettings from "./AISettings.jsx";
 import RepliesPanel from "./RepliesPanel.jsx";
 import ResumePanel from "./ResumePanel.jsx";
 import GreetingPanel from "./GreetingPanel.jsx";
+import GreetingHistory from "./GreetingHistory.jsx";
 import CityPicker from "./CityPicker.jsx";
 
 const api = window.desk;
@@ -261,6 +262,7 @@ function App() {
     ["resume", FileText, "个人简历"],
     ["models", Sparkles, "模型与人格"],
     ["history", History, "投递记录"],
+    ["greetings", Sparkles, "招呼记录"],
     ["logs", ScrollText, "运行日志"],
     ["settings", Settings, "偏好与数据"],
   ];
@@ -405,6 +407,9 @@ function App() {
                   onBrowser={action(() => openBrowser())}
                 />
               )}
+              {page === "greetings" && (
+                <GreetingHistory overview={state.greetings} />
+              )}
               {page === "workspace" && (
                 <>
                   <div className="page-heading">
@@ -471,7 +476,7 @@ function App() {
                         <>
                           <Button
                             icon={Search}
-                            disabled={busy}
+                            disabled={busy || greetingBlocked}
                             onClick={() => start("preview")}
                           >
                             预览职位
@@ -799,10 +804,9 @@ function App() {
                       locked={locked || state.autoReply?.enabled}
                       update={(key, value) => update("message", key, value)}
                       template={template}
-                      save={save}
-                      act={act}
                       onResume={() => setPage("resume")}
                       onModels={() => setPage("models")}
+                      onHistory={() => setPage("greetings")}
                     />
                   </div>
                   <section className="panel limits">

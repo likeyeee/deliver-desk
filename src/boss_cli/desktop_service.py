@@ -125,6 +125,7 @@ class DesktopService:
             "attemptsToday": self.store.attempts_today(),
             "replyState": self.replies.state,
             "resume": self.resume.snapshot(),
+            "greetings": self.store.greetings_overview(),
             "replies": self.store.reply_history(),
             "replyContacts": self.store.reply_contacts(),
             "replyEvents": self.store.reply_events(),
@@ -139,6 +140,10 @@ class DesktopService:
     async def request(self, method, params):
         if method == "snapshot":
             return self.snapshot()
+        if method == "greetings":
+            if params.get("id"):
+                return self.store.greeting(params["id"])
+            return self.store.greeting_history(params.get("cursor", 0), params.get("limit", 50))
         if method == "saveConfig":
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再修改配置")
@@ -160,19 +165,12 @@ class DesktopService:
             if action == "clear":
                 self.resume.check_revision(params.get("revision"))
                 return self.resume.clear()
-            if action not in {"analyze", "previewGreeting"}:
+            if action != "analyze":
                 raise ValueError("无效的简历操作")
             self.resume.check_revision(params.get("revision"))
-            if action == "previewGreeting" and not self.resume.document.profile:
-                raise ValueError("请先分析简历")
-            job = (
-                self.resume.preview_job(params.get("jobId", ""))
-                if action == "previewGreeting"
-                else None
-            )
             self.run_id = uuid.uuid4().hex[:12]
             self.task = asyncio.create_task(
-                self.resume.run(action, self.config.model_copy(deep=True), self.run_id, job)
+                self.resume.run(action, self.config.model_copy(deep=True), self.run_id)
             )
             self.task.add_done_callback(self.finished)
             return {"runId": self.run_id}
@@ -243,7 +241,7 @@ class DesktopService:
                 self.store.pending_message(params.get("jobId", ""))
             config = self.config.model_copy(deep=True)
             if (
-                mode == "send"
+                mode in {"preview", "send"}
                 and config.message.mode == "ai"
                 and (not self.resume.document or not self.resume.document.profile)
             ):
@@ -257,8 +255,9 @@ class DesktopService:
                     config=config,
                     resume=self.resume.document.model_copy(deep=True),
                     run_id=self.run_id,
+                    mode=mode,
                 )
-                if mode == "send" and config.message.mode == "ai"
+                if mode in {"preview", "send"} and config.message.mode == "ai"
                 else None
             )
             self.task = asyncio.create_task(

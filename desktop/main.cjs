@@ -42,6 +42,7 @@ const serviceCommands = [
   "resolve",
   "reply",
   "resolveReply",
+  "greetings",
 ];
 function assertSender(event) {
   if (
@@ -133,7 +134,7 @@ else {
       );
       for (const name of serviceCommands)
         handle(name, async (params) => {
-          if (name === "start" && params.mode === "send") {
+          if (name === "start" && ["preview", "send"].includes(params.mode)) {
             const state = await backend.request("snapshot");
             if (
               state.config.message.mode === "ai" &&
@@ -174,10 +175,7 @@ else {
             path: filePaths[0],
           });
         }
-        if (
-          ["analyze", "previewGreeting"].includes(params.action) &&
-          !vault.status().configured
-        )
+        if (params.action === "analyze" && !vault.status().configured)
           throw Error("请先在模型与人格中保存 DeepSeek API Key");
         return backend.request("resume", params);
       });

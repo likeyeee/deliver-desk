@@ -3,6 +3,7 @@ import copy
 import io
 import os
 import zipfile
+from functools import partial
 from types import SimpleNamespace
 from xml.sax.saxutils import escape
 
@@ -12,7 +13,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from boss_cli.browser import NeedsAttention, SendResult
 from boss_cli.config import Config, dump_config
-from boss_cli.control import StopRequested, is_active
+from boss_cli.control import Controller, StopRequested, is_active
 from boss_cli.desktop_service import DesktopService
 from boss_cli.resume import (
     ResumeDocument,
@@ -22,7 +23,7 @@ from boss_cli.resume import (
     generate_greeting,
 )
 from boss_cli.runner import Runner
-from boss_cli.storage import now
+from boss_cli.storage import Store, now
 
 TEXT = "示例候选人\n2023—2025 年任产品经理，负责知识库问答项目，需求分析与效果评估。\n技能：Python、SQL。"
 PROFILE = {
@@ -125,7 +126,6 @@ def test_analysis_revision_edits_reload_and_clear(store):
         workflow.save_profile(PROFILE, document["revision"])
     updated = workflow.save_text(TEXT + "\n新增项目：客服知识库。")
     assert updated["document"]["profile"] is None
-    assert updated["greeting"] is None
     workflow.clear()
     assert not workflow.file.exists()
     assert workflow.snapshot()["document"] is None
@@ -148,7 +148,7 @@ def test_unsupported_empty_and_large_resume_are_rejected(tmp_path, filename, con
         extract_resume(file)
 
 
-async def test_analysis_and_preview_use_saved_resume_without_contacting_website(store, config, job):
+async def test_analysis_uses_saved_resume_without_contacting_website(store, config):
     calls = []
 
     async def request(method, **params):
@@ -165,16 +165,8 @@ async def test_analysis_and_preview_use_saved_resume_without_contacting_website(
     assert result["status"] == "completed"
     assert calls[0][1]["text"] == TEXT
     assert calls[0][1]["transport"] == "llm"
-    store.save_job(job)
-    result = await workflow.run(
-        "previewGreeting", config, "greeting-test", workflow.preview_job(job.job_id)
-    )
-    assert result["status"] == "completed"
-    greeting = workflow.snapshot()["greeting"]
-    assert greeting["job"]["job_id"] == job.job_id
-    assert calls[-1][1]["job"]["description"] == job.description
-    assert calls[-1][1]["resume"]["profile"] == PROFILE
-    assert calls[-1][1]["resume"]["text"] == TEXT
+    assert workflow.document.profile.model_dump() == PROFILE
+    assert len(calls) == 1
     assert store.history() == []
     assert store.attempts_today() == 0
 
@@ -293,19 +285,226 @@ async def test_model_failure_and_stop_never_reserve_or_contact(config, store, jo
         await runner.process(adapter, job)
     assert adapter.greeted == [] and store.history() == []
     assert store.attempts_today() == 0
+    failed = store.greeting(store.greeting_history()["items"][0]["id"])
+    assert failed["status"] == "failed" and "DeepSeek 服务异常" in failed["note"]
     store.update_run("test-run", control="stop")
     with pytest.raises(StopRequested):
         await runner.process(adapter, job)
     assert adapter.greeted == []
 
 
-async def test_ai_job_preview_never_calls_model(config, store, job):
+async def test_discovery_automatically_generates_and_send_reuses_durable_greetings(
+    config, store, job
+):
     config.message.mode = "ai"
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+    calls = []
+    message = "我有知识库项目的需求分析经验。" * 100
 
-    async def forbidden(**_kwargs):
-        raise AssertionError("职位预览不应请求模型")
+    async def request(method, **params):
+        assert method == "generateGreeting"
+        assert params["resume"] == {"text": TEXT, "profile": PROFILE}
+        assert params["job"]["description"].startswith("负责岗位")
+        calls.append(params)
+        return {"message": message, "usage": {"total_tokens": 1200}}
 
-    runner = Runner(config, store, "test-run", send=False, greeting=forbidden)
-    await runner.process(GreetingAdapter(store), job)
-    assert store.history() == []
+    bridge = SimpleNamespace(request=request)
+    callback = partial(generate_greeting, store=store, bridge=bridge, config=config, resume=resume)
+    preview = Runner(
+        config,
+        store,
+        "test-run",
+        send=False,
+        greeting=partial(callback, run_id="test-run", mode="preview"),
+    )
+    adapter = GreetingAdapter(store)
+    await preview.process(adapter, job)
+    assert store.history() == [] and adapter.greeted == []
     assert store.attempts_today() == 0
+    original = store.greeting(store.greeting_history()["items"][0]["id"])
+    assert original["message"] == message
+    assert original["usage"] == {"total_tokens": 1200}
+    assert original["resume_revision"] == resume.revision()
+    assert original["delivery_status"] == "" and original["mode"] == "preview"
+    assert original["profile_json"] == PROFILE
+    assert "text" not in original["profile_json"]
+    store.create_run("send-auto", "send")
+
+    class AuditedAdapter(GreetingAdapter):
+        async def greet(self, job, body):
+            record = store.greeting(store.greeting_history()["items"][0]["id"])
+            assert record["delivery_status"] == "sending" and record["message"] == body
+            return await super().greet(job, body)
+
+    sender = Runner(
+        config, store, "send-auto", send=True, greeting=partial(callback, run_id="send-auto")
+    )
+    await sender.process(AuditedAdapter(store), job)
+    assert len(calls) == 1
+    sent = store.greeting(store.greeting_history()["items"][0]["id"])
+    assert sent["delivery_status"] == "sent" and sent["reused_from"] == original["id"]
+    assert sent["message"] == message and sent["usage"] == {}
+    await sender.process(adapter, job)
+    assert len(calls) == 1 and store.greetings_overview()["total"] == 2
+    store.delivery(job.job_id, "unknown", "待核对")
+    assert store.greeting(sent["id"])["delivery_status"] == "unknown"
+    store.resolve(job.job_id, "sent", "人工核对已送达")
+    assert store.greeting(sent["id"])["delivery_note"] == "人工核实：人工核对已送达"
+    reloaded = Store(store.directory)
+    assert reloaded.greeting(original["id"])["message"] == message
+    assert reloaded.greeting(sent["id"])["delivery_status"] == "sent"
+    reloaded.close()
+
+
+@pytest.mark.parametrize(
+    "changed", ["jd", "resume", "instructions", "model", "persona", "temperature"]
+)
+async def test_changed_generation_inputs_refresh_message_and_preserve_original_snapshot(
+    config, store, job, changed
+):
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+    calls = []
+
+    async def request(_method, **params):
+        calls.append(params)
+        return {"message": f"完整招呼 {len(calls)}"}
+
+    bridge = SimpleNamespace(request=request)
+    await generate_greeting(
+        store=store,
+        bridge=bridge,
+        config=config,
+        resume=resume,
+        job=job,
+        control=Controller(store, "test-run"),
+        run_id="test-run",
+        mode="preview",
+    )
+    old = store.greeting_history()["items"][0]["id"]
+    description = job.description
+    if changed == "jd":
+        job.description += "，新增 SQL 指标分析职责"
+    elif changed == "resume":
+        resume = resume.model_copy(update={"text": TEXT + "\n有客服知识库经验"})
+    elif changed == "instructions":
+        config.message.instructions += "突出需求分析经验"
+    elif changed == "model":
+        config.llm.model = "deepseek-v4-pro"
+    elif changed == "persona":
+        config.llm.system_prompt += "表达友好自然"
+    else:
+        config.llm.temperature = 0.1
+    store.create_run("changed", "preview")
+    await generate_greeting(
+        store=store,
+        bridge=bridge,
+        config=config,
+        resume=resume,
+        job=job,
+        control=Controller(store, "changed"),
+        run_id="changed",
+        mode="preview",
+    )
+    assert len(calls) == 2
+    assert store.greeting(old)["job_json"]["description"] == description
+    assert store.greeting(old)["message"] == "完整招呼 1"
+    latest = store.greeting(store.greeting_history()["items"][0]["id"])
+    assert latest["message"] == "完整招呼 2" and latest["reused_from"] == ""
+
+
+async def test_missing_jd_and_stopped_generation_leave_audit_before_any_contact(config, store, job):
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+    entered = asyncio.Event()
+
+    async def request(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    job.description = ""
+    kwargs = dict(
+        store=store, bridge=SimpleNamespace(request=request), config=config, resume=resume, job=job
+    )
+    with pytest.raises(NeedsAttention, match="岗位 JD"):
+        await generate_greeting(**kwargs, control=Controller(store, "test-run"), run_id="test-run")
+    assert not entered.is_set()
+    first = store.greeting(store.greeting_history()["items"][0]["id"])
+    assert first["status"] == "failed" and first["message"] == ""
+    store.create_run("stop-generation", "send")
+    job.description = "知识库应用开发"
+    task = asyncio.create_task(
+        generate_greeting(
+            **kwargs, control=Controller(store, "stop-generation"), run_id="stop-generation"
+        )
+    )
+    await asyncio.wait_for(entered.wait(), 2)
+    assert store.greeting_history()["items"][0]["status"] == "generating"
+    store.update_run("stop-generation", control="stop")
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(task, 2)
+    assert store.greeting_history()["items"][0]["status"] == "stopped"
+    assert store.attempts_today() == 0 and store.history() == []
+
+
+def test_greeting_recovery_pagination_and_readonly_service(config, store, job):
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+    for index in range(53):
+        run_id = f"audit-{index}"
+        store.create_run(run_id, "send")
+        store.begin_greeting(str(index), run_id, job, "send", resume, config, str(index))
+        if index < 52:
+            store.finish_greeting(str(index), "generated", message="完整正文")
+    store.reserve(job, "audit-51", "完整正文", 100)
+    store.recover()
+    assert store.greeting("52")["status"] == "stopped"
+    assert store.greeting("51")["delivery_status"] == "unknown"
+    assert store.greeting("50")["delivery_status"] == "not_sent"
+    first = store.greeting_history()
+    second = store.greeting_history(first["nextCursor"])
+    assert len(first["items"]) == 50 and len(second["items"]) == 3
+    assert second["nextCursor"] is None
+    assert len({row["id"] for row in first["items"] + second["items"]}) == 53
+    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
+def test_legacy_database_upgrade_keeps_delivery_history_and_adds_greeting_audit(tmp_path, job):
+    directory = tmp_path / "legacy"
+    legacy = Store(directory)
+    legacy.create_run("old-run", "send")
+    legacy.save_job(job)
+    legacy.reserve(job, "old-run", "原有招呼", 100)
+    legacy.delivery(job.job_id, "sent", "已送达")
+    legacy.db.executescript("""
+        DROP TRIGGER greeting_delivery_insert;
+        DROP TRIGGER greeting_delivery_update;
+        DROP TABLE greetings;
+        PRAGMA user_version=4;
+    """)
+    legacy.close()
+    upgraded = Store(directory)
+    assert upgraded.history()[0]["message"] == "原有招呼"
+    assert upgraded.blocked(job.job_id) == "sent"
+    assert upgraded.greeting_history()["items"] == []
+    assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 5
+    upgraded.close()
+
+
+async def test_greeting_history_remains_readable_during_active_task_and_ai_preview_requires_resume(
+    tmp_path,
+):
+    service = DesktopService(tmp_path / "state", tmp_path / "config.yaml")
+    try:
+        service.config.message.mode = "ai"
+        with pytest.raises(ValueError, match="上传并分析简历"):
+            await service.request("start", {"mode": "preview"})
+        service.task = asyncio.create_task(asyncio.Event().wait())
+        assert (await service.request("greetings", {}))["items"] == []
+    finally:
+        await service.shutdown()

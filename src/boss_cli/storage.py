@@ -77,6 +77,29 @@ class Store:
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
           PRIMARY KEY(job_id, context_hash)
         );
+        CREATE TABLE IF NOT EXISTS greetings (
+          id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id), mode TEXT NOT NULL,
+          title TEXT NOT NULL, company TEXT NOT NULL, job_json TEXT NOT NULL,
+          resume_revision TEXT NOT NULL, resume_name TEXT NOT NULL, profile_json TEXT NOT NULL,
+          model TEXT NOT NULL, instructions TEXT NOT NULL, input_hash TEXT NOT NULL,
+          reused_from TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',
+          usage TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'generating',
+          note TEXT NOT NULL DEFAULT '', delivery_status TEXT NOT NULL DEFAULT '',
+          delivery_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(run_id, job_id)
+        );
+        CREATE INDEX IF NOT EXISTS greetings_input ON greetings(job_id, input_hash);
+        CREATE TRIGGER IF NOT EXISTS greeting_delivery_insert AFTER INSERT ON deliveries BEGIN
+          UPDATE greetings SET delivery_status=NEW.status, delivery_note=NEW.note,
+            updated_at=NEW.updated_at
+          WHERE run_id=NEW.run_id AND job_id=NEW.job_id AND message=NEW.message;
+        END;
+        CREATE TRIGGER IF NOT EXISTS greeting_delivery_update AFTER UPDATE ON deliveries BEGIN
+          UPDATE greetings SET delivery_status=NEW.status, delivery_note=NEW.note,
+            updated_at=NEW.updated_at
+          WHERE run_id=NEW.run_id AND job_id=NEW.job_id AND message=NEW.message;
+        END;
         """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(runs)")}
         for name in ("target", "attempts"):
@@ -89,7 +112,7 @@ class Store:
         ):
             if name not in reply_columns:
                 self.db.execute(f"ALTER TABLE replies ADD COLUMN {name} {definition}")
-        self.db.execute("PRAGMA user_version=4")
+        self.db.execute("PRAGMA user_version=5")
 
     def close(self):
         self.db.close()
@@ -165,6 +188,11 @@ class Store:
             ("上次生成期间退出，未自动发送；重新开启监控后可再次生成", now()),
         )
         self.db.execute(
+            "UPDATE greetings SET status='stopped',note=?,updated_at=? WHERE status='generating'",
+            ("上次生成期间退出，未发起沟通", now()),
+        )
+        self.finish_greetings(note="上次任务已退出，未发起沟通")
+        self.db.execute(
             "UPDATE runs SET status='interrupted',updated_at=?,note=? WHERE status IN ('starting','running','paused','stopping')",
             (now(), "上次进程已退出"),
         )
@@ -172,6 +200,107 @@ class Store:
     def blocked(self, job_id: str) -> str | None:
         row = self.db.execute("SELECT status FROM deliveries WHERE job_id=?", (job_id,)).fetchone()
         return row[0] if row and row[0] != "not_sent" else None
+
+    def begin_greeting(self, greeting_id, run_id, job, mode, resume, config, input_hash):
+        self.save_job(job)
+        self.db.execute(
+            """INSERT INTO greetings(id,run_id,job_id,mode,title,company,job_json,
+            resume_revision,resume_name,profile_json,model,instructions,input_hash,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                greeting_id,
+                run_id,
+                job.job_id,
+                mode,
+                job.title,
+                job.company,
+                json.dumps(job.as_dict(), ensure_ascii=False),
+                resume.revision(),
+                resume.source_name,
+                resume.profile.model_dump_json(),
+                config.llm.model,
+                config.message.instructions,
+                input_hash,
+                now(),
+                now(),
+            ),
+        )
+
+    def cached_greeting(self, job_id, input_hash):
+        row = self.db.execute(
+            """SELECT id,message FROM greetings WHERE job_id=? AND input_hash=?
+            AND status='generated' AND message<>'' ORDER BY rowid DESC LIMIT 1""",
+            (job_id, input_hash),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def finish_greeting(
+        self, greeting_id, status, *, message="", usage=None, note="", reused_from=""
+    ):
+        if status not in {"generated", "failed", "stopped"}:
+            raise ValueError("无效的招呼生成状态")
+        self.db.execute(
+            """UPDATE greetings SET status=?,message=?,usage=?,note=?,reused_from=?,updated_at=?
+            WHERE id=? AND status='generating'""",
+            (
+                status,
+                message,
+                json.dumps(usage or {}, ensure_ascii=False),
+                note,
+                reused_from,
+                now(),
+                greeting_id,
+            ),
+        )
+
+    def skip_greeting(self, run_id, job_id, note):
+        self.db.execute(
+            """UPDATE greetings SET delivery_status='not_sent',delivery_note=?,updated_at=?
+            WHERE run_id=? AND job_id=? AND mode='send' AND status='generated' AND delivery_status=''""",
+            (note, now(), run_id, job_id),
+        )
+
+    def finish_greetings(self, run_id=None, *, note="任务已结束，未发起沟通"):
+        self.db.execute(
+            """UPDATE greetings SET delivery_status='not_sent',delivery_note=?,updated_at=?
+            WHERE mode='send' AND status='generated' AND delivery_status='' AND (? IS NULL OR run_id=?)""",
+            (note, now(), run_id, run_id),
+        )
+
+    def greeting(self, greeting_id):
+        row = self.db.execute("SELECT * FROM greetings WHERE id=?", (greeting_id,)).fetchone()
+        if not row:
+            raise ValueError("招呼记录不存在")
+        result = dict(row)
+        for field in ("job_json", "profile_json", "usage"):
+            result[field] = json.loads(result[field])
+        return result
+
+    def greetings_overview(self):
+        row = self.db.execute(
+            "SELECT COUNT(*) AS total,COALESCE(MAX(updated_at),'') AS updated_at FROM greetings"
+        ).fetchone()
+        # Include state changes within the same second so polling always refreshes the list.
+        states = self.db.execute(
+            "SELECT status,delivery_status,COUNT(*) FROM greetings GROUP BY status,delivery_status"
+        ).fetchall()
+        return dict(row) | {"revision": [list(state) for state in states]}
+
+    def greeting_history(self, cursor=0, limit=50):
+        cursor, limit = max(0, int(cursor)), max(1, min(100, int(limit)))
+        rows = [
+            dict(row)
+            for row in self.db.execute(
+                """SELECT rowid AS cursor,id,job_id,title,company,mode,model,status,note,
+            delivery_status,delivery_note,reused_from,created_at,updated_at FROM greetings
+            WHERE (?=0 OR rowid<?) ORDER BY rowid DESC LIMIT ?""",
+                (cursor, cursor, limit + 1),
+            )
+        ]
+        return {
+            "items": rows[:limit],
+            "nextCursor": rows[limit - 1]["cursor"] if len(rows) > limit else None,
+        }
 
     def reply_job(self, job_id: str) -> Job:
         row = self.db.execute(

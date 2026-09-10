@@ -754,34 +754,37 @@ app
       JSON.stringify(state.resume.state),
     );
     assert.deepEqual(state.resume.document.profile, fixtures.RESUME_PROFILE);
-    await backend.request("resume", {
-      action: "previewGreeting",
-      revision: state.resume.document.revision,
-      jobId: "batch003",
-    });
-    state = await until(async () => {
-      const s = await backend.request("snapshot");
-      return !s.active ? s : false;
-    });
-    assert.equal(
-      state.run.status,
-      "completed",
-      JSON.stringify(state.resume.state),
-    );
-    assert.equal(
-      state.resume.greeting.message,
-      greetingFor(state.resume.greeting.job),
-    );
-    assert.equal(
-      state.attemptsToday,
-      8,
-      "Resume analysis and greeting previews never reserve or send",
-    );
     fixtureJobs = ["ai001", "ai002"];
     config.message.mode = "ai";
     config.search.max_jobs = 2;
     config.run.max_sends = 2;
     await backend.request("saveConfig", { config });
+    await backend.request("start", { mode: "preview" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 60000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.events.slice(-8)),
+    );
+    assert.equal(
+      state.attemptsToday,
+      8,
+      "Automatic discovery generates without sending",
+    );
+    let greetingHistory = await backend.request("greetings");
+    assert.equal(greetingHistory.items.length, 2);
+    assert.ok(
+      greetingHistory.items.every(
+        (row) =>
+          row.mode === "preview" &&
+          row.status === "generated" &&
+          row.delivery_status === "",
+      ),
+    );
+    assert.equal(greetingCalls.length, 2);
     await backend.request("start", { mode: "send" });
     state = await until(async () => {
       const s = await backend.request("snapshot");
@@ -794,7 +797,11 @@ app
     );
     assert.equal(state.run.sent, 2);
     assert.equal(state.attemptsToday, 10);
-    assert.equal(greetingCalls.length, 3);
+    assert.equal(
+      greetingCalls.length,
+      2,
+      "Sending reuses unchanged discovery greetings",
+    );
     for (const id of fixtureJobs) {
       const call = greetingCalls.find((item) => item.job.job_id === id);
       assert.ok(call.job.description.includes(`${id} 专属要求`));
@@ -803,6 +810,41 @@ app
       assert.equal(delivery.message, greetingFor(call.job));
       assert.ok(delivery.message.length > 1000);
     }
+    greetingHistory = await backend.request("greetings");
+    assert.equal(greetingHistory.items.length, 4);
+    assert.ok(
+      greetingHistory.items
+        .slice(0, 2)
+        .every(
+          (row) =>
+            row.mode === "send" &&
+            row.delivery_status === "sent" &&
+            row.reused_from,
+        ),
+    );
+    const sentGreeting = await backend.request("greetings", {
+      id: greetingHistory.items[0].id,
+    });
+    assert.equal(sentGreeting.message, greetingFor(sentGreeting.job_json));
+    assert.equal(sentGreeting.resume_revision, state.resume.document.revision);
+    fixtureJobs = ["ai003"];
+    await backend.request("start", { mode: "send" });
+    state = await until(async () => {
+      const s = await backend.request("snapshot");
+      return !s.active ? s : false;
+    }, 60000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.events.slice(-8)),
+    );
+    assert.equal(state.run.sent, 1);
+    assert.equal(
+      greetingCalls.length,
+      3,
+      "A newly discovered job generates and sends automatically",
+    );
+    assert.equal(state.attemptsToday, 11);
     fixtureJobs = ["aifail"];
     backend.llm.generateGreeting = async () => {
       throw Error("DeepSeek 测试生成失败");
@@ -814,13 +856,16 @@ app
       return !s.active ? s : false;
     });
     assert.equal(state.run.status, "needs_attention");
-    assert.equal(state.attemptsToday, 10);
+    assert.equal(state.attemptsToday, 11);
     assert.ok(!state.history.some((item) => item.job_id === "aifail"));
     assert.ok(
       !requests
         .slice(requestsBeforeFailure)
         .some((url) => url.includes("/chat")),
     );
+    greetingHistory = await backend.request("greetings");
+    assert.equal(greetingHistory.items[0].status, "failed");
+    assert.equal(greetingHistory.items[0].job_id, "aifail");
     console.log(
       "PASS: PDF/DOCX/TXT import, private resume analysis, zero-send preview, per-job AI greetings, full native receipts and model failure before contact",
     );
@@ -842,7 +887,7 @@ app
           llmDraftAndReply: true,
           automaticReplies: 2,
           resumeFormats: ["pdf", "docx", "txt"],
-          aiGreetings: 2,
+          aiGreetings: 3,
         },
         null,
         2,

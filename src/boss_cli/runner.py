@@ -47,6 +47,7 @@ class Runner:
         self.store.update_run(self.run_id, attempts=self.attempts, **self.counts)
 
     def skip(self, job: Job, reason: str):
+        self.store.skip_greeting(self.run_id, job.job_id, reason)
         self.counts["skipped"] += 1
         self.log("skip", f"{job.company} · {job.title}：{reason}", job)
         self.update()
@@ -80,14 +81,11 @@ class Runner:
             return
         self.counts["matched"] += 1
         if self.config.message.mode == "ai":
-            if self.send:
-                if not self.greeting:
-                    raise NeedsAttention("AI 岗位招呼请在桌面端上传并分析简历后运行")
-                message = await self.greeting(job=job, control=self.control)
-                if not isinstance(message, str) or not message.strip():
-                    raise NeedsAttention("AI 未返回有效的岗位招呼，未发起沟通")
-            else:
-                message = "[AI 岗位招呼：投递前结合此职位与简历生成，可在工作台单独预览]"
+            if not self.greeting:
+                raise NeedsAttention("AI 岗位招呼请在桌面端上传并分析简历后运行")
+            message = await self.greeting(job=job, control=self.control)
+            if not isinstance(message, str) or not message.strip():
+                raise NeedsAttention("AI 未返回有效的岗位招呼，未发起沟通")
         else:
             message = (
                 render_message(self.config.message, job)
@@ -297,6 +295,9 @@ async def run_task(
                 store.update_run(run_id, status="failed", note=clean_error(error), **runner.counts)
                 runner.log("failed", clean_error(error), level="ERROR")
             finally:
+                store.finish_greetings(
+                    run_id, note=store.run(run_id)["note"] or "任务已结束，未发起沟通"
+                )
                 if session and getattr(session, "failure_report", None):
                     runner.log("diagnostics", f"失败现场：{session.failure_report}")
                 for sig, previous in previous_signals.items():

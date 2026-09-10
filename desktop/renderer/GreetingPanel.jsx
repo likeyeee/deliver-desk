@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Send, Sparkles, FileText, Square } from "lucide-react";
+import React from "react";
+import { Send, Sparkles, FileText, History } from "lucide-react";
 
 export default function GreetingPanel({
   config,
@@ -7,23 +7,11 @@ export default function GreetingPanel({
   locked,
   update,
   template,
-  save,
-  act,
   onResume,
   onModels,
+  onHistory,
 }) {
-  const [jobId, setJobId] = useState("");
   const document = state.resume?.document;
-  const greeting = state.resume?.greeting;
-  const ready = !!document?.profile && !!state.llm?.configured;
-  const generating =
-    state.active && state.resume?.state.status === "generating";
-  const run = (fn) => () => act(fn).catch(() => {});
-  const currentPreview =
-    greeting?.job.job_id === jobId &&
-    greeting.resumeRevision === document?.revision &&
-    greeting.instructions === config.instructions &&
-    greeting.model === state.config.llm.model;
   return (
     <section className="panel message-panel">
       <div className="panel-heading">
@@ -105,79 +93,27 @@ export default function GreetingPanel({
                 onChange={(event) => update("instructions", event.target.value)}
               />
             </label>
-            <label className="field">
-              <span>预览岗位</span>
-              <select
-                aria-label="预览岗位"
-                value={jobId}
-                onChange={(event) => setJobId(event.target.value)}
-              >
-                <option value="">选择已发现的职位</option>
-                {state.jobs.map((job) => (
-                  <option key={job.job_id} value={job.job_id}>
-                    {job.title} · {job.company}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {!state.jobs.length && (
-              <p className="ai-hint">先点击“预览职位”获取岗位。</p>
-            )}
-            <button
-              type="button"
-              className="btn"
-              disabled={locked || !ready || !jobId}
-              onClick={run(async () => {
-                await save();
-                return window.desk.resume({
-                  action: "previewGreeting",
-                  revision: document.revision,
-                  jobId,
-                });
-              })}
-            >
-              <Sparkles size={15} /> {generating ? "正在生成…" : "生成招呼预览"}
-            </button>
           </>
         )}
       </fieldset>
       {config.mode === "ai" ? (
         <>
-          {generating && (
-            <button
-              className="btn"
-              onClick={run(() => window.desk.control({ action: "stop" }))}
-            >
-              <Square size={14} />
-              停止生成
-            </button>
-          )}
-          <p className="ai-hint">
-            每个岗位单独生成。简历正文、特点和职位资料将发送至 DeepSeek。
-          </p>
-          {state.resume?.state.status === "error" && (
-            <p role="status" className="ai-warning">
-              {state.resume.state.note}
+          <div className="message-preview">
+            <span>
+              <Sparkles size={13} /> 自动为新岗位写招呼
+            </span>
+            <p>
+              发现符合条件的岗位后，结合 JD
+              与当前简历，突出最相关的真实经历和成果。投递时自动使用，完整内容与结果均留存。
             </p>
-          )}
-          {greeting && (
-            <div className="message-preview greeting-preview">
-              <span>
-                <Sparkles size={13} /> 招呼预览 · 未发送
-              </span>
-              {currentPreview ? (
-                <>
-                  <b>
-                    {greeting.job.title} · {greeting.job.company}
-                  </b>
-                  <p>{greeting.message}</p>
-                  <small>投递时会结合最新职位详情重新生成。</small>
-                </>
-              ) : (
-                <p>岗位或配置已变化，请重新生成预览。</p>
-              )}
-            </div>
-          )}
+            <button type="button" className="text-button" onClick={onHistory}>
+              <History size={14} /> 查看招呼记录
+            </button>
+          </div>
+          <p className="ai-hint">
+            预览职位时自动生成招呼，不发送消息。简历正文、特点和岗位 JD 将发送至
+            DeepSeek。
+          </p>
         </>
       ) : (
         <div className="message-preview">

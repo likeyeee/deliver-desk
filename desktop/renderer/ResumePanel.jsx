@@ -242,7 +242,7 @@ export default function ResumePanel({
             aria-labelledby="remove-resume-title"
           >
             <h2 id="remove-resume-title">移除本地简历？</h2>
-            <p>将移除导入的正文和分析结果；原文件与投递记录保留。</p>
+            <p>将移除导入的正文和分析结果；原文件与招呼、投递记录保留。</p>
             <div className="modal-actions">
               <button className="btn" onClick={() => setRemove(false)}>
                 取消

@@ -303,11 +303,13 @@ p {
   white-space: nowrap;
 }
 .badge.sent,
+.badge.generated,
 .badge.completed {
   background: #e8f4ec;
   color: #39845d;
 }
 .badge.running,
+.badge.generating,
 .badge.starting,
 .badge.sending {
   background: #e4efff;
@@ -861,6 +863,57 @@ tr:last-child td {
   position: absolute;
   right: 17px;
   top: 17px;
+}
+.greeting-history-intro {
+  color: #718179;
+  margin: -8px 0 22px;
+  font-size: 13px;
+}
+.greeting-detail {
+  width: min(720px, calc(100vw - 64px));
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  color: #33483d;
+}
+.greeting-detail::backdrop {
+  background: #213d3055;
+  backdrop-filter: blur(4px);
+}
+.greeting-detail h3 {
+  font-size: 14px;
+  margin: 24px 0 12px;
+}
+.greeting-detail h4 {
+  margin: 16px 0 8px;
+}
+.greeting-detail details {
+  padding: 16px 0;
+  border-top: 1px solid #e5ebe7;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.greeting-detail summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.greeting-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.greeting-detail > .greeting-text {
+  padding: 18px;
+  background: #f4f8f5;
+  border-radius: 9px;
+  margin-bottom: 20px;
+}
+.greeting-pagination {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 18px 22px;
 }
 .modal-icon {
   width: 49px;

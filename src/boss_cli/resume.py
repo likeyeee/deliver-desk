@@ -20,7 +20,6 @@ from pypdf import PdfReader
 from .browser import NeedsAttention, clean_error
 from .config import StrictModel
 from .control import Controller, StopRequested, task_lock
-from .models import Job
 from .storage import now
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -163,9 +162,22 @@ async def controlled_request(awaitable, control):
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def generate_greeting(*, store, bridge, job, config, resume, control, run_id):
+async def generate_greeting(*, store, bridge, job, config, resume, control, run_id, mode="send"):
+    await control.checkpoint()
     if not resume or not resume.profile:
         raise NeedsAttention("请先上传并分析简历，再使用 AI 岗位招呼")
+    inputs = {
+        "policy": "automatic-v1",
+        "job": job.as_dict(),
+        "resume": resume.revision(),
+        "llm": config.llm.model_dump(),
+        "instructions": config.message.instructions,
+    }
+    input_hash = hashlib.sha256(
+        json.dumps(inputs, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    greeting_id = uuid.uuid4().hex
+    store.begin_greeting(greeting_id, run_id, job, mode, resume, config, input_hash)
     store.event(
         run_id,
         "INFO",
@@ -174,6 +186,19 @@ async def generate_greeting(*, store, bridge, job, config, resume, control, run_
         job.job_id,
     )
     try:
+        if not job.description.strip():
+            raise ValueError("未读取到岗位 JD，请确认职位详情可以正常打开")
+        cached = store.cached_greeting(job.job_id, input_hash)
+        if cached:
+            store.finish_greeting(
+                greeting_id,
+                "generated",
+                message=cached["message"],
+                reused_from=cached["id"],
+                note="岗位 JD、简历和表达要求未变，沿用已生成的招呼",
+            )
+            store.event(run_id, "INFO", "greeting_reused", "已自动沿用招呼并留存记录", job.job_id)
+            return cached["message"]
         result = await controlled_request(
             bridge.request(
                 "generateGreeting",
@@ -189,10 +214,13 @@ async def generate_greeting(*, store, bridge, job, config, resume, control, run_
         if not isinstance(message, str) or not message.strip():
             raise ValueError("模型未返回有效的完整招呼")
     except (StopRequested, asyncio.CancelledError):
+        store.finish_greeting(greeting_id, "stopped", note="生成已停止，未发起沟通")
         raise
     except Exception as error:
+        store.finish_greeting(greeting_id, "failed", note=clean_error(error))
         raise NeedsAttention("AI 岗位招呼生成失败，未发起沟通：" + clean_error(error)) from error
     message = message.strip()
+    store.finish_greeting(greeting_id, "generated", message=message, usage=result.get("usage"))
     store.event(
         run_id,
         "INFO",
@@ -209,7 +237,6 @@ class ResumeWorkflow:
         self.file = directory / "resume.json"
         self.document = None
         self.state = {"status": "idle", "note": ""}
-        self.greeting = None
         if self.file.exists():
             try:
                 if self.file.stat().st_size > 1024 * 1024:
@@ -226,7 +253,6 @@ class ResumeWorkflow:
                 else None
             ),
             "state": self.state,
-            "greeting": self.greeting,
         }
 
     def persist(self, document):
@@ -238,7 +264,6 @@ class ResumeWorkflow:
         finally:
             temporary.unlink(missing_ok=True)
         self.document = document
-        self.greeting = None
 
     def import_file(self, file):
         path = Path(file)
@@ -280,90 +305,57 @@ class ResumeWorkflow:
 
     def clear(self):
         self.file.unlink(missing_ok=True)
-        self.document, self.greeting = None, None
+        self.document = None
         self.state = {"status": "idle", "note": "简历已移除"}
         self.store.event(None, "INFO", "resume_removed", "已移除本地简历及分析结果")
         return self.snapshot()
 
-    def preview_job(self, job_id):
-        row = self.store.db.execute("SELECT data FROM jobs WHERE job_id=?", (job_id,)).fetchone()
-        if not row:
-            raise ValueError("请先预览职位，再选择要生成招呼的岗位")
-        return Job(**json.loads(row["data"]))
-
-    async def run(self, action, config, run_id, job=None):
+    async def run(self, action, config, run_id):
+        if action != "analyze":
+            raise ValueError("未知简历操作")
         try:
             with task_lock(self.directory):
                 self.store.recover()
-                self.store.create_run(
-                    run_id, "resume_analyze" if action == "analyze" else "greeting_preview"
-                )
+                self.store.create_run(run_id, "resume_analyze")
                 control = Controller(self.store, run_id)
                 await control.checkpoint()
                 document = self.document.model_copy(deep=True)
                 revision = document.revision()
                 self.state = {
-                    "status": "analyzing" if action == "analyze" else "generating",
-                    "note": "DeepSeek 正在分析简历…"
-                    if action == "analyze"
-                    else "DeepSeek 正在生成岗位招呼…",
+                    "status": "analyzing",
+                    "note": "DeepSeek 正在分析简历…",
                 }
-                if action == "analyze":
-                    self.store.event(
-                        run_id, "INFO", "resume_analyze", f"开始分析简历 · {config.llm.model}"
+                self.store.event(
+                    run_id, "INFO", "resume_analyze", f"开始分析简历 · {config.llm.model}"
+                )
+                result = await controlled_request(
+                    self.bridge.request(
+                        "analyzeResume",
+                        transport="llm",
+                        config=config.llm.model_dump(),
+                        text=document.text,
+                    ),
+                    control,
+                )
+                try:
+                    profile = ResumeProfile.model_validate(result.get("profile"))
+                except ValidationError as error:
+                    raise ValueError("DeepSeek 简历分析格式无效，请重新分析") from error
+                self.check_revision(revision)
+                self.persist(
+                    document.model_copy(
+                        update={
+                            "profile": profile,
+                            "profile_model": config.llm.model,
+                            "analyzed_at": now(),
+                        }
                     )
-                    result = await controlled_request(
-                        self.bridge.request(
-                            "analyzeResume",
-                            transport="llm",
-                            config=config.llm.model_dump(),
-                            text=document.text,
-                        ),
-                        control,
-                    )
-                    try:
-                        profile = ResumeProfile.model_validate(result.get("profile"))
-                    except ValidationError as error:
-                        raise ValueError("DeepSeek 简历分析格式无效，请重新分析") from error
-                    self.check_revision(revision)
-                    self.persist(
-                        document.model_copy(
-                            update={
-                                "profile": profile,
-                                "profile_model": config.llm.model,
-                                "analyzed_at": now(),
-                            }
-                        )
-                    )
-                    self.state = {
-                        "status": "ready",
-                        "note": "简历分析完成，可编辑特点后用于岗位招呼",
-                    }
-                    self.store.event(run_id, "INFO", "resume_analyzed", "简历特点已保存至本机")
-                else:
-                    self.greeting = None
-                    message = await generate_greeting(
-                        store=self.store,
-                        bridge=self.bridge,
-                        job=job,
-                        config=config,
-                        resume=document,
-                        control=control,
-                        run_id=run_id,
-                    )
-                    self.check_revision(revision)
-                    self.greeting = {
-                        "job": job.as_dict(),
-                        "message": message,
-                        "model": config.llm.model,
-                        "resumeRevision": revision,
-                        "createdAt": now(),
-                        "instructions": config.message.instructions,
-                    }
-                    self.state = {"status": "ready", "note": "岗位招呼已生成，未发送"}
-                    self.store.event(
-                        run_id, "INFO", "greeting_preview", "预览岗位招呼，未发起沟通", job.job_id
-                    )
+                )
+                self.state = {
+                    "status": "ready",
+                    "note": "简历分析完成，可编辑特点后用于岗位招呼",
+                }
+                self.store.event(run_id, "INFO", "resume_analyzed", "简历特点已保存至本机")
                 self.store.update_run(run_id, status="completed", note=self.state["note"])
         except (StopRequested, asyncio.CancelledError):
             self.state = {"status": "stopped", "note": "已停止，未发送消息"}

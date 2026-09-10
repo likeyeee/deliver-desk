@@ -69,7 +69,6 @@ app
           revision: "example-resume",
         },
         state: { status: "ready", note: "简历特点已保存" },
-        greeting: null,
       },
       jobs: [
         {
@@ -92,6 +91,36 @@ app
         },
       ],
     };
+    state.greetings = { total: 2, revision: 1 };
+    const greetings = state.jobs.map((job, index) => ({
+      id: `example-${index}`,
+      ...job,
+      mode: index ? "preview" : "send",
+      status: "generated",
+      delivery_status: index ? "" : "sent",
+      created_at: "2026-09-10T15:30:00+08:00",
+      updated_at: "2026-09-10T15:30:10+08:00",
+      resume_name: state.resume.document.source_name,
+      resume_revision: "example-resume",
+      model: config.llm.model,
+      instructions: config.message.instructions,
+      message:
+        "您好，我曾负责知识库问答项目的需求分析与效果评估，并掌握 Python、SQL。贵公司的岗位涉及知识库应用，希望结合这些经历参与需求梳理和效果验证，期待进一步交流。",
+      job_json: {
+        ...job,
+        description:
+          "负责企业知识库应用的需求分析与效果评估，使用 Python、SQL 分析业务数据。",
+      },
+      profile_json: fixtures.RESUME_PROFILE,
+      usage: { total_tokens: 1680 },
+      note: "",
+      delivery_note: index ? "" : "已核实完整正文与送达回执",
+    }));
+    ipcMain.handle("desk:greetings", (_event, params) =>
+      params.id
+        ? greetings.find((row) => row.id === params.id)
+        : { items: greetings, nextCursor: null },
+    );
     ipcMain.handle("desk:snapshot", () => state);
     const isolated = session.fromPartition("docs-screenshot");
     isolated.webRequest.onBeforeRequest((details, callback) => {
@@ -144,27 +173,30 @@ app
     await new Promise((resolve) => setTimeout(resolve, 200));
     await capture("resume");
     config.message.mode = "ai";
-    state.resume.greeting = {
-      job: state.jobs[0],
-      message:
-        "您好，看到贵公司的 AI 应用工程师岗位。我曾负责知识库问答项目的需求分析与效果评估，掌握 Python、SQL，希望结合这些经历参与岗位工作，期待进一步交流。",
-      model: config.llm.model,
-      resumeRevision: "example-resume",
-      instructions: config.message.instructions,
-    };
     window.setContentSize(1360, 940);
     await window.loadFile(path.join(root, "ui-dist/index.html"));
     await window.webContents
       .executeJavaScript(`new Promise((resolve, reject) => {
       const end = Date.now() + 10000;
       const timer = setInterval(() => {
-        const select = document.querySelector('select[aria-label="预览岗位"]');
-        if (select) { clearInterval(timer); select.value='demo1'; select.dispatchEvent(new Event('change', { bubbles: true })); resolve(); }
-        else if (Date.now() > end) { clearInterval(timer); reject(Error('Greeting preview failed to render')); }
+        const panel = document.querySelector('textarea[aria-label="AI 招呼要求"]');
+        if (panel) { clearInterval(timer); resolve(); }
+        else if (Date.now() > end) { clearInterval(timer); reject(Error('Automatic greeting settings failed to render')); }
       }, 50);
     });`);
     await new Promise((resolve) => setTimeout(resolve, 200));
     await capture("ai-greeting");
+    window.setContentSize(1360, 940);
+    await window.webContents.executeJavaScript(
+      "[...document.querySelectorAll('nav button')].find(button => button.textContent === '招呼记录').click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await capture("greeting-history");
+    await window.webContents.executeJavaScript(
+      "[...document.querySelectorAll('button')].find(button => button.textContent === '查看记录').click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await capture("greeting-detail");
     window.destroy();
     console.log(
       "Created workspace, resume and AI greeting screenshots from synthetic data",
