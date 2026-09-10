@@ -547,8 +547,10 @@ async def test_login_blank_redirect_invalidates_old_qr_image(web):
         )
 
     await web.page.route("**/web/user/**", blank_login)
+    # Slow CI navigation or a pending screenshot must leave time for the
+    # adapter's three-second blank-page guard before the login timeout.
     with pytest.raises(NeedsAttention, match="about:blank"):
-        await web.login(5)
+        await web.login(15)
     assert not image.exists()
 
 
