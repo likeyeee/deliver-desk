@@ -25,6 +25,19 @@ LIST_HTML = """<!doctype html><html><body>
 <script>document.querySelector('input').value=new URL(location.href).searchParams.get('query') || '';</script>
 </body></html>"""
 
+CITY_DIALOG_HTML = """<div class="filter">
+<span class="city-label" onclick="document.querySelector('.city-select-dialog').hidden=false">全国</span>
+<div class="city-select-dialog" hidden onclick="if(event.target.dataset.city){document.querySelector('.city-label').textContent=event.target.textContent;this.hidden=true}">
+<nav onclick="if(event.target.tagName==='BUTTON')this.parentElement.querySelectorAll('[data-group]').forEach(group=>group.hidden=group.dataset.group!==event.target.textContent)">
+<button>ABCDE</button><button>FGHJ</button><button>KLMN</button><button>PQRST</button><button>WXYZ</button>
+</nav><span data-city="1">全国</span>
+<div data-group="ABCDE" hidden><span data-city="1">北京</span><span data-city="1">澳门</span></div>
+<div data-group="FGHJ" hidden><span data-city="1">吉林</span></div>
+<div data-group="KLMN" hidden><span data-city="1">牡丹江</span></div>
+<div data-group="PQRST" hidden><span data-city="1">泉州</span><span data-city="1">深圳</span><span data-city="1">台湾</span></div>
+<div data-group="WXYZ" hidden><span data-city="1">厦门</span><span data-city="1">乌鲁木齐</span><span data-city="1">香港</span></div>
+</div></div>"""
+
 DETAIL_HTML = """<!doctype html><html><body>
 <div class="name"><h1>AI应用工程师</h1><span class="salary">20-30K·14薪</span></div><a href="/gongsi/company.html">示例科技</a>
 <a id="contact" href="javascript:;" onclick="this.textContent='继续沟通'">立即沟通</a>
@@ -280,6 +293,25 @@ async def test_city_outside_popular_group_uses_visible_alphabet_tab(web):
     </div>""")
     await web.select_filter("城市", "泉州")
     assert await web.page.locator(".city-label").inner_text() == "泉州"
+
+
+@pytest.mark.parametrize(
+    "city", ["北京", "吉林", "牡丹江", "深圳", "厦门", "乌鲁木齐", "香港", "澳门", "台湾"]
+)
+async def test_search_applies_cities_across_all_alphabet_groups(web, city):
+    async def city_list(route):
+        await route.fulfill(
+            content_type="text/html; charset=utf-8",
+            body=LIST_HTML.replace(
+                '<div class="filter"><span class="city-name">全国</span></div>', CITY_DIALOG_HTML
+            ),
+        )
+
+    await web.page.route("**/web/geek/jobs?*", city_list)
+    web.config.search.city = city
+    await web.search("AI应用")
+    assert await web.page.locator(".city-label").inner_text() == city
+    assert not await web.page.locator(".city-select-dialog").is_visible()
 
 
 async def test_search_rejects_input_that_disagrees_with_route(web):

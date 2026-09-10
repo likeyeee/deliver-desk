@@ -36,6 +36,7 @@ import AISettings from "./AISettings.jsx";
 import RepliesPanel from "./RepliesPanel.jsx";
 import ResumePanel from "./ResumePanel.jsx";
 import GreetingPanel from "./GreetingPanel.jsx";
+import CityPicker from "./CityPicker.jsx";
 
 const api = window.desk;
 const pacePresets = {
@@ -188,6 +189,14 @@ function App() {
   };
   function update(group, key, value) {
     setDraft((d) => ({ ...d, [group]: { ...d[group], [key]: value } }));
+  }
+  function setCity(city) {
+    setDraft((d) => {
+      if (city === d.search.city) return d;
+      const filters = { ...d.search.filters };
+      delete filters["工作区域"];
+      return { ...d, search: { ...d.search, city, filters } };
+    });
   }
   function setTarget(value) {
     setDraft((d) => ({
@@ -614,29 +623,10 @@ function App() {
                           />
                         </Field>
                         <div className="form-grid">
-                          <Field label="工作城市">
-                            <input
-                              value={draft.search.city}
-                              onChange={(e) =>
-                                update("search", "city", e.target.value)
-                              }
-                              list="cities"
-                            />
-                            <datalist id="cities">
-                              {[
-                                "全国",
-                                "北京",
-                                "上海",
-                                "深圳",
-                                "广州",
-                                "杭州",
-                                "成都",
-                                "泉州",
-                              ].map((v) => (
-                                <option key={v} value={v} />
-                              ))}
-                            </datalist>
-                          </Field>
+                          <CityPicker
+                            city={draft.search.city}
+                            onChange={setCity}
+                          />
                           <Field label="薪资待遇">
                             <select
                               value={draft.search.filters["薪资待遇"] || ""}

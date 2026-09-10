@@ -11,15 +11,15 @@
 
 | 系统                  | 安装包                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- |
-| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.6.0/DeliverDesk-0.6.0-mac-arm64.dmg)   |
-| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.6.0/DeliverDesk-0.6.0-win-x64.exe) |
+| macOS · Apple Silicon | [下载 DMG](https://github.com/likeyeee/deliver-desk/releases/download/v0.6.1/DeliverDesk-0.6.1-mac-arm64.dmg)   |
+| Windows · x64         | [下载安装程序](https://github.com/likeyeee/deliver-desk/releases/download/v0.6.1/DeliverDesk-0.6.1-win-x64.exe) |
 
 安装包自带运行环境。当前为未签名测试版；[安装说明与验证范围](docs/desktop-guide.md)。
 
 ## 使用
 
 1. 点击 **扫码登录**，在主窗口的 **BOSS 浏览器** 中完成登录。
-2. 设置关键词、城市、筛选条件和招呼语，点击 **预览职位**。
+2. 设置关键词，依次选择 **省份 / 地区 → 工作城市**，再设置筛选条件和招呼语，点击 **预览职位**。
 3. 设置 **本次投递次数** 和节奏，点击 **开始投递**；自动切到浏览器，可暂停、继续或停止。
 4. 在 **投递记录** 查看结果、只读核对送达，或导出 CSV。
 5. 在 **模型与人格** 配置 DeepSeek 和系统提示词，再到 **消息回复** 开启 **自动回复**，或读取会话、编辑草稿后手动确认发送。[使用说明](docs/llm-replies.md)
@@ -61,6 +61,7 @@ docs/           使用、架构、适配与发布记录
 
 ### 2026-09-10
 
+- 城市选择支持全国 34 个省级地区、373 个网站城市选项：先选省份，再选城市；原有城市设置自动恢复，切换城市会清除旧的工作区域条件。
 - 新增个人简历：上传 PDF、DOCX、TXT 或粘贴正文，使用 DeepSeek 提取个人概况、技能、代表经历和岗位优势，支持校对与编辑。
 - 新增 AI 岗位招呼：结合每个岗位的具体要求和个人经历生成招呼，可设置表达要求并先预览，投递时按最新职位详情重新生成。
 - 简历和分析结果保存在本机，不随配置导出；修改正文后需重新分析，也可移除本地简历。

@@ -25,6 +25,7 @@ const fixtures = JSON.parse(
     encoding: "utf8",
   }),
 );
+const regions = require("../desktop/renderer/data/regions.json");
 let desktop, page;
 async function until(check, timeout = 20000) {
   const end = Date.now() + timeout;
@@ -88,6 +89,11 @@ async function run() {
                 /<ul class="results">[\s\S]*?<\/ul>\s*<aside>/,
                 `<ul class="results">${["ui001", "ui002", "ui003", "ui004"].map((id) => card.replaceAll("abc123", id)).join("")}</ul><aside>`,
               );
+        if (!route.includes("/chat") && !detail)
+          html = html.replace(
+            '<div class="filter"><span class="city-name">全国</span></div>',
+            fixtures.CITY_DIALOG_HTML,
+          );
         if (route.includes("/chat") || detail)
           html = html.replaceAll("abc123", current);
         if (route.includes("/chat") && globalThis.replyTestMode)
@@ -117,6 +123,74 @@ async function run() {
       callback({ cancel: !details.url.startsWith("file:") }),
     );
   }, fixtures);
+  const provinceSelect = page.getByLabel("省份 / 地区", { exact: true });
+  const citySelect = page.getByLabel("工作城市", { exact: true });
+  assert.equal(await provinceSelect.inputValue(), "全国");
+  assert.equal(await citySelect.isDisabled(), true);
+  assert.equal(regions.provinces.length, 34);
+  assert.equal(await provinceSelect.locator("option").count(), 35);
+  assert.equal(regions.provinces.flatMap((item) => item.cities).length, 373);
+
+  // Load an older configuration containing only a city, including a local area.
+  const legacyConfig = (await snapshot()).config;
+  legacyConfig.search.city = "泉州";
+  legacyConfig.search.filters = { 工作区域: "丰泽区", 薪资待遇: "10-20K" };
+  await page.evaluate(
+    (config) => window.desk.saveConfig({ config }),
+    legacyConfig,
+  );
+  await page.reload();
+  await provinceSelect.waitFor();
+  assert.equal(await provinceSelect.inputValue(), "福建");
+  assert.equal(await citySelect.inputValue(), "泉州");
+  // Changing a city within the province clears only the previous local area.
+  await citySelect.selectOption("厦门");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await until(async () => (await snapshot()).config.search.city === "厦门");
+  assert.deepEqual((await snapshot()).config.search.filters, {
+    薪资待遇: "10-20K",
+  });
+  for (const province of regions.provinces) {
+    await provinceSelect.selectOption(province.name);
+    assert.deepEqual(
+      await citySelect
+        .locator("option")
+        .evaluateAll((options) => options.map((option) => option.value)),
+      province.cities,
+    );
+    await citySelect.selectOption(province.cities.at(-1));
+    assert.equal(await provinceSelect.inputValue(), province.name);
+  }
+  await provinceSelect.selectOption("广东");
+  await citySelect.selectOption("深圳");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await until(async () => (await snapshot()).config.search.city === "深圳");
+  await page.reload();
+  await provinceSelect.waitFor();
+  assert.equal(await provinceSelect.inputValue(), "广东");
+  assert.equal(await citySelect.inputValue(), "深圳");
+
+  // A previously hand-entered city stays intact until the user chooses another.
+  const customConfig = (await snapshot()).config;
+  customConfig.search.city = "自定义示例城市";
+  await page.evaluate(
+    (config) => window.desk.saveConfig({ config }),
+    customConfig,
+  );
+  await page.reload();
+  await provinceSelect.waitFor();
+  assert.equal(await provinceSelect.inputValue(), "saved-city");
+  assert.equal(await citySelect.inputValue(), "自定义示例城市");
+  await provinceSelect.selectOption("全国");
+  assert.equal(await citySelect.inputValue(), "全国");
+  assert.equal(await citySelect.isDisabled(), true);
+  await provinceSelect.selectOption("福建");
+  await citySelect.selectOption("厦门");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await until(async () => (await snapshot()).config.search.city === "厦门");
+  console.log(
+    "PASS: all 34 provinces link to 373 cities; saved cities, nationwide and local area reset work",
+  );
   await page.getByRole("button", { name: "扫码登录", exact: true }).click();
   await page.getByRole("region", { name: "BOSS 内置浏览器" }).waitFor();
   assert.equal(
@@ -212,6 +286,36 @@ async function run() {
     state.config,
   );
   await page.reload();
+  await page.getByRole("button", { name: "预览职位", exact: true }).click();
+  await until(async () => (await snapshot()).active);
+  const cityPreview = await until(async () => {
+    const data = await snapshot();
+    return !data.active ? data : false;
+  }, 60000);
+  assert.equal(
+    cityPreview.run.status,
+    "completed",
+    JSON.stringify(cityPreview.events.slice(-8)),
+  );
+  assert.equal(cityPreview.run.attempts, 0);
+  assert.ok(
+    cityPreview.events.some((event) => event.message?.includes("城市：厦门")),
+  );
+  assert.equal(
+    await desktop.evaluate(async ({ webContents }) => {
+      const site = webContents
+        .getAllWebContents()
+        .find((wc) => wc.getURL().includes("/web/geek/jobs"));
+      return site.executeJavaScript(
+        "document.querySelector('.city-label').textContent",
+      );
+    }),
+    "厦门",
+  );
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  console.log(
+    "PASS: selected city reaches the native browser search and preview sends no messages",
+  );
   await page.getByRole("button", { name: "开始投递", exact: true }).click();
   await page.getByRole("dialog", { name: "确认本次投递范围" }).waitFor();
   await page.getByRole("button", { name: "确认开始", exact: true }).click();
