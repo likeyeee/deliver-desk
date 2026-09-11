@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "boss-job-cli"
-version = "0.7.0"
-description = "通过可见浏览器操作 BOSS 直聘的本地求职工作台与 CLI"
+version = "0.8.0"
+description = "通过可见浏览器操作 BOSS 直聘和智联招聘的本地求职工作台与 CLI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

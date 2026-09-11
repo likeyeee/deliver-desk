@@ -17,6 +17,7 @@ from .control import Controller, StopRequested, task_lock
 from .matching import reject_reason
 from .models import Job, readable_salary
 from .storage import Store, private_dir
+from .zhaopin import ZhaopinAdapter
 
 
 class Runner:
@@ -80,7 +81,9 @@ class Runner:
             self.skip(job, reason)
             return
         self.counts["matched"] += 1
-        if self.config.message.mode == "ai":
+        if self.config.platform == "zhaopin":
+            message = "[智联在线简历投递；网站同时发送平台招呼]"
+        elif self.config.message.mode == "ai":
             if not self.greeting:
                 raise NeedsAttention("AI 岗位招呼请在桌面端上传并分析简历后运行")
             message = await self.greeting(job=job, control=self.control)
@@ -99,7 +102,7 @@ class Runner:
         )
         self.update()
         if not self.send:
-            self.log("preview", "预览完成，未点击沟通或发送", job)
+            self.log("preview", "预览完成，未点击投递或沟通", job)
             return
         if not await adapter.preflight(job):
             self.store.mark_contacted(job, self.run_id)
@@ -116,7 +119,9 @@ class Runner:
         self.log("sending", "开始沟通，发送状态已落盘", job)
         try:
             result = await adapter.greet(job, message)
-            self.store.delivery(job.job_id, result.status, result.note)
+            self.store.delivery(
+                job.job_id, result.status, result.note, message=getattr(result, "message", None)
+            )
             self.reserved_job = None
         except BaseException:
             self.store.delivery(
@@ -209,6 +214,9 @@ async def run_task(
     private_dir(directory)
     store = Store(directory)
     try:
+        if mode == "verify":
+            pending_job, _ = store.pending_message(verify_job_id or "")
+            config = config.model_copy(update={"platform": pending_job.platform})
         with task_lock(directory):
             store.recover()
             store.create_run(run_id, mode)
@@ -227,6 +235,7 @@ async def run_task(
             store.update_run(
                 run_id,
                 status="running",
+                platform=config.platform,
                 pid=os.getpid(),
                 target=config.run.max_sends if mode == "send" else 0,
             )
@@ -234,7 +243,8 @@ async def run_task(
             session = None
             try:
                 async with factory(config, directory) as session:
-                    adapter = BossAdapter(session, config, runner.control)
+                    adapter_type = ZhaopinAdapter if config.platform == "zhaopin" else BossAdapter
+                    adapter = adapter_type(session, config, runner.control)
                     if mode == "login":
                         runner.log(
                             "login", "请在打开的浏览器中完成登录，检测成功后会保存登录状态并退出"
@@ -242,9 +252,7 @@ async def run_task(
                         await adapter.login(config.browser.login_timeout_seconds)
                         runner.log("login", "已检测到登录状态；后续任务将复用此浏览器目录/连接")
                     elif mode == "diagnose":
-                        await session.page.goto(
-                            "https://www.zhipin.com/web/geek/jobs", wait_until="domcontentloaded"
-                        )
+                        await session.page.goto(adapter.jobs_url, wait_until="domcontentloaded")
                         try:
                             await adapter.wait_ready()
                         except (NeedsAttention, LayoutChanged) as error:
@@ -261,13 +269,19 @@ async def run_task(
                         runner.log("verify", "正在重新核对历史消息的职位、原文与送达回执", job)
                         await adapter.login(config.browser.login_timeout_seconds)
                         await adapter.inspect_job(job)
-                        chat = await adapter.open_full_chat(job)
-                        if not await adapter.has_delivery_receipt(chat, job, message):
+                        if config.platform == "zhaopin":
+                            verified = await adapter.verify_delivery(job)
+                        else:
+                            chat = await adapter.open_full_chat(job)
+                            verified = await adapter.has_delivery_receipt(chat, job, message)
+                        if not verified:
                             raise NeedsAttention("没有找到这条历史消息的明确送达回执，原状态保留")
                         store.delivery(
                             job.job_id,
                             "sent",
-                            "只读核验：同一职位会话中，历史消息原文与己方送达/已读回执一致；未新发消息",
+                            "只读核验：同一职位存在明确的智联投递回执；未重新投递"
+                            if config.platform == "zhaopin"
+                            else "只读核验：同一职位会话中，历史消息原文与己方送达/已读回执一致；未新发消息",
                         )
                         runner.log("receipt_verified", "已核实历史消息送达；本次没有新发消息", job)
                     else:

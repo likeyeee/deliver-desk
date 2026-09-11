@@ -48,6 +48,8 @@ function query(q) {
 """
 
 CLICK_POINT = """
+if(e[Symbol.for('deliverdesk.actionGuard')] && !e[Symbol.for('deliverdesk.actionGuard')]())
+  throw Error('点击前职位身份发生变化，未提交');
 if(!visible(e) || e.disabled || e.getAttribute('aria-disabled')==='true')
   throw Error('目标控件不可操作');
 // A fixed toolbar can cover the center while the rest of the button remains
@@ -343,6 +345,7 @@ class RpcBrowser:
     def __init__(self, bridge):
         self.bridge = bridge
         self.pages = {}
+        self.platform = "boss"
 
     def ensure(self, page_id):
         if page_id not in self.pages:
@@ -362,7 +365,7 @@ class RpcBrowser:
             self.ensure(data["parent"]).emit("popup", page)
 
     async def new_page(self):
-        data = await self.bridge.request("new")
+        data = await self.bridge.request("new", platform=self.platform)
         page = self.ensure(data["id"])
         page.url = data["url"]
         return page
@@ -377,8 +380,10 @@ class RpcSession(BrowserSession):
 
     async def __aenter__(self):
         self.context = self.manager
+        self.manager.platform = self.config.platform
         data = await self.manager.bridge.request(
             "primary",
+            platform=self.config.platform,
             preferCurrent=self.prefer_current,
             keep=self.retain_page.id
             if self.retain_page is not None and not self.retain_page.is_closed()

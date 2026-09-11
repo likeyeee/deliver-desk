@@ -15,6 +15,7 @@ const commands = [
   "browserViewport",
   "browserTab",
   "browserNavigate",
+  "browserPlatform",
   "openJob",
   "exportHistory",
   "exportConfig",

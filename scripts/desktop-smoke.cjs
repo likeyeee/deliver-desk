@@ -869,6 +869,127 @@ app
     console.log(
       "PASS: PDF/DOCX/TXT import, private resume analysis, zero-send preview, per-job AI greetings, full native receipts and model failure before contact",
     );
+    const bossPages = [...browser.views.keys()].filter(
+      (id) => browser.pagePlatforms.get(id) === "boss",
+    );
+    const zpSession = browser.platformSession("zhaopin");
+    assert.notEqual(zpSession, browser.session);
+    await browser.session.cookies.set({
+      url: "https://www.zhaopin.com",
+      name: "isolation",
+      value: "boss-only",
+    });
+    assert.equal(
+      (await zpSession.cookies.get({ name: "isolation" })).length,
+      0,
+    );
+    await zpSession.protocol.handle("https", (request) => {
+      const route = new URL(request.url).pathname;
+      const match = route.match(/\/jobdetail\/(zp00[12])\.htm/);
+      const html = match
+        ? fixtures.ZHAOPIN_DETAIL_HTML.replaceAll("_ID_", match[1])
+            .replaceAll(
+              "_TITLE_",
+              match[1] === "zp001" ? "办公室文员" : "行政文员",
+            )
+            .replaceAll(
+              "_COMPANY_",
+              match[1] === "zp001" ? "示例甲公司" : "示例乙公司",
+            )
+        : fixtures.ZHAOPIN_LIST_HTML;
+      return new Response(html, {
+        headers: { "content-type": "text/html;charset=utf-8" },
+      });
+    });
+    const zpConfig = structuredClone(
+      (await backend.request("snapshot")).config,
+    );
+    zpConfig.platform = "zhaopin";
+    zpConfig.search = {
+      keywords: ["文员"],
+      city: "酒泉",
+      filters: {
+        薪资待遇: "4K-6K",
+        学历要求: "本科",
+        公司行业: "汽车/摩托车/电动车 > 汽车4S店/经销商",
+      },
+      max_jobs: 10,
+      max_scrolls: 1,
+    };
+    zpConfig.match.title_any = [];
+    zpConfig.match.description_all = [];
+    zpConfig.run.max_sends = 2;
+    zpConfig.run.action_delay = [0, 0];
+    zpConfig.run.job_delay = [0, 0];
+    zpConfig.run.cooldown_seconds = [0, 0];
+    const beforeZp = (await backend.request("snapshot")).attemptsToday;
+    await backend.request("saveConfig", { config: zpConfig });
+    for (const mode of ["preview", "send", "send"]) {
+      await backend.request("start", { mode });
+      state = await until(async () => {
+        const s = await backend.request("snapshot");
+        return !s.active ? s : false;
+      }, 60000);
+      assert.equal(
+        state.run.status,
+        "completed",
+        JSON.stringify(state.events.slice(-10)),
+      );
+      assert.equal(state.run.platform, "zhaopin");
+      assert.ok(
+        state.replyContacts.every((row) => !row.job_id.startsWith("zhaopin:")),
+      );
+      assert.equal(
+        state.attemptsToday,
+        beforeZp + (mode === "preview" ? 0 : 2),
+      );
+    }
+    assert.equal(
+      state.history.filter(
+        (row) => row.platform === "zhaopin" && row.status === "sent",
+      ).length,
+      2,
+    );
+    assert.equal((await browser.status()).loggedIn, true);
+    assert.ok(
+      (await browser.status()).tabs.every((tab) => tab.platform === "zhaopin"),
+    );
+    assert.ok(
+      bossPages.every((id) => browser.views.has(id)),
+      "Zhaopin tasks must preserve BOSS pages",
+    );
+    const zpPage = [...browser.views.keys()].find(
+      (id) => browser.pagePlatforms.get(id) === "zhaopin",
+    );
+    await assert.rejects(
+      browser.command("goto", {
+        page: zpPage,
+        url: "https://www.zhipin.com/web/geek/jobs",
+      }),
+      /对应平台/,
+    );
+    const guarded = browser.get(browser.lastId).webContents;
+    await guarded.executeJavaScript(
+      `document.body.innerHTML='<button id="guard-test">投递测试</button>';const e=document.getElementById('guard-test');e[Symbol.for('deliverdesk.clickTarget')]='guarded';e[Symbol.for('deliverdesk.actionGuard')]=()=>false;void 0;`,
+    );
+    const guardPoint = await guarded.executeJavaScript(
+      `(()=>{const r=document.getElementById('guard-test').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
+    );
+    await assert.rejects(
+      browser.command("click", {
+        page: browser.lastId,
+        target: "guarded",
+        ...guardPoint,
+      }),
+      /目标控件/,
+    );
+    browser.selectPlatform("boss");
+    assert.ok(
+      (await browser.status()).tabs.every((tab) => tab.platform === "boss"),
+    );
+    console.log(
+      "PASS: isolated platform sessions, Zhaopin native search/city/filters, zero-send preview, resume receipts, duplicate prevention and guarded target clicks",
+    );
     await backend.close();
     browser.destroy();
     host.destroy();

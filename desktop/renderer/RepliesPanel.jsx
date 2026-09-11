@@ -38,8 +38,10 @@ export default function RepliesPanel({
   const draft = loaded ? reply.draft : null;
   const jobs =
     state.replyContacts ||
-    state.history.filter((row) =>
-      ["sent", "contacted", "partial", "unknown"].includes(row.status),
+    state.history.filter(
+      (row) =>
+        (row.platform || "boss") === "boss" &&
+        ["sent", "contacted", "partial", "unknown"].includes(row.status),
     );
   const selected = jobs.find((row) => row.job_id === jobId);
   const pending = state.replies?.some(

@@ -1,5 +1,5 @@
 // Exercise the shipped renderer, preload and main-process IPC in a separate data directory.
-// BOSS requests are fulfilled with synthetic pages before any browser tab is opened.
+// Both platforms use synthetic pages before any browser tab is opened.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -124,6 +124,36 @@ async function run() {
           headers: { "content-type": "text/html;charset=utf-8" },
         });
       });
+    await session
+      .fromPartition("persist:zhaopin")
+      .protocol.handle("https", async (request) => {
+        const route = new URL(request.url).pathname;
+        (globalThis.zhaopinRequests ||= []).push(route);
+        if (globalThis.delayZpNavigation && route === "/jobs/") {
+          globalThis.delayZpNavigation = false;
+          globalThis.zpNavigationPending = true;
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          globalThis.zpNavigationPending = false;
+        }
+        const match = route.match(/\/jobdetail\/(zp00[12])\.htm/);
+        const html =
+          route === "/login"
+            ? fixtures.ZHAOPIN_LOGIN_HTML
+            : match
+              ? fixtures.ZHAOPIN_DETAIL_HTML.replaceAll("_ID_", match[1])
+                  .replaceAll(
+                    "_TITLE_",
+                    match[1] === "zp001" ? "办公室文员" : "行政文员",
+                  )
+                  .replaceAll(
+                    "_COMPANY_",
+                    match[1] === "zp001" ? "示例甲公司" : "示例乙公司",
+                  )
+              : fixtures.ZHAOPIN_LIST_HTML;
+        return new Response(html, {
+          headers: { "content-type": "text/html;charset=utf-8" },
+        });
+      });
     session.defaultSession.webRequest.onBeforeRequest((details, callback) =>
       callback({ cancel: !details.url.startsWith("file:") }),
     );
@@ -197,7 +227,7 @@ async function run() {
     "PASS: all 34 provinces link to 373 cities; saved cities, nationwide and local area reset work",
   );
   await page.getByRole("button", { name: "扫码登录", exact: true }).click();
-  await page.getByRole("region", { name: "BOSS 内置浏览器" }).waitFor();
+  await page.getByRole("region", { name: "求职浏览器" }).waitFor();
   assert.equal(
     await page.getByRole("progressbar", { name: "本次投递进度" }).count(),
     0,
@@ -324,7 +354,7 @@ async function run() {
   await page.getByRole("button", { name: "开始投递", exact: true }).click();
   await page.getByRole("dialog", { name: "确认本次投递范围" }).waitFor();
   await page.getByRole("button", { name: "确认开始", exact: true }).click();
-  await page.getByRole("region", { name: "BOSS 内置浏览器" }).waitFor();
+  await page.getByRole("region", { name: "求职浏览器" }).waitFor();
   await until(async () => (await snapshot()).active);
   await page.getByRole("button", { name: "运行日志", exact: true }).click();
   state = await until(async () => {
@@ -346,7 +376,7 @@ async function run() {
     ),
     1,
   );
-  await page.getByRole("button", { name: "BOSS 浏览器", exact: true }).click();
+  await page.getByRole("button", { name: "求职浏览器", exact: true }).click();
   await until(
     async () =>
       (await page
@@ -956,6 +986,213 @@ async function run() {
   console.log(
     "PASS: encrypted DeepSeek key, connection test, persona, read conversation, editable draft, explicit send, receipt and duplicate prevention",
   );
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "任务工作台", exact: true })
+    .click();
+  const beforeZp = await snapshot();
+  const modelCallsBeforeZp = (
+    await desktop.evaluate(() => globalThis.llmRequests)
+  ).length;
+  assert.equal(beforeZp.config.message.mode, "ai");
+  assert.equal(beforeZp.llm.configured, false);
+  assert.ok(!beforeZp.resume.document);
+  await page.getByLabel("省份 / 地区", { exact: true }).selectOption("全国");
+  await page.getByLabel("薪资待遇", { exact: false }).selectOption("10-20K");
+  await page
+    .getByLabel("本次投递平台", { exact: true })
+    .selectOption("zhaopin");
+  await until(async () => (await snapshot()).browser.platform === "zhaopin");
+  await page
+    .getByRole("heading", { name: "智联简历投递", exact: true })
+    .waitFor();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "开始投递", exact: true })
+      .isDisabled(),
+    true,
+  );
+  assert.equal(
+    await page
+      .getByLabel("省份 / 地区", { exact: true })
+      .locator('option[value="全国"]')
+      .count(),
+    0,
+  );
+  assert.deepEqual((await snapshot()).config.search.filters, {});
+  assert.equal(
+    (await snapshot()).config.platform_filters.boss.薪资待遇,
+    "10-20K",
+  );
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "求职浏览器", exact: true })
+    .click();
+  await page.getByLabel("招聘平台", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByLabel("招聘平台", { exact: true }).inputValue(),
+    "zhaopin",
+  );
+  await until(async () =>
+    desktop.evaluate(async ({ webContents }) => {
+      const login = webContents
+        .getAllWebContents()
+        .find((wc) =>
+          wc.getURL().startsWith("https://passport.zhaopin.com/login"),
+        );
+      return (
+        login &&
+        login.executeJavaScript(
+          "!!document.querySelector('#qr') && !document.querySelector('#qr').hidden",
+        )
+      );
+    }),
+  );
+  await desktop.evaluate(async ({ webContents }) => {
+    const login = webContents
+      .getAllWebContents()
+      .find((wc) =>
+        wc.getURL().startsWith("https://passport.zhaopin.com/login"),
+      );
+    await login.executeJavaScript(
+      "document.querySelector('#qr button').click()",
+    );
+  });
+  await until(async () => (await snapshot()).browser.loggedIn);
+  await page.getByLabel("招聘平台", { exact: true }).selectOption("boss");
+  await until(async () => (await snapshot()).browser.platform === "boss");
+  assert.equal((await snapshot()).config.search.filters.薪资待遇, "10-20K");
+  assert.equal((await snapshot()).browser.loggedIn, true);
+  await page.getByLabel("招聘平台", { exact: true }).selectOption("zhaopin");
+  await until(async () => (await snapshot()).browser.platform === "zhaopin");
+  assert.equal((await snapshot()).browser.loggedIn, true);
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("本次投递平台", { exact: true }).inputValue(),
+    "zhaopin",
+  );
+  await page.getByLabel("省份 / 地区", { exact: true }).selectOption("甘肃");
+  await page.getByLabel("工作城市", { exact: true }).selectOption("酒泉");
+  await page.getByLabel("职位关键词", { exact: false }).fill("文员");
+  await page.getByLabel("薪资待遇", { exact: false }).selectOption("4K-6K");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  const zpConfig = (await snapshot()).config;
+  zpConfig.match.title_any = [];
+  zpConfig.match.description_all = [];
+  zpConfig.search.max_jobs = 10;
+  zpConfig.search.max_scrolls = 1;
+  zpConfig.run.max_sends = 2;
+  zpConfig.run.action_delay = [0.1, 0.1];
+  zpConfig.run.job_delay = [0.3, 0.3];
+  zpConfig.run.cooldown_seconds = [0, 0];
+  await page.evaluate((config) => window.desk.saveConfig({ config }), zpConfig);
+  for (const tab of (await snapshot()).browser.tabs) {
+    await page.evaluate(
+      (id) => window.desk.browserTab({ id, close: true }),
+      tab.id,
+    );
+  }
+  const zpRequestsBeforeColdStart = await desktop.evaluate(() => {
+    globalThis.delayZpNavigation = true;
+    return globalThis.zhaopinRequests.length;
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "预览职位", exact: true }).click();
+  await until(() => desktop.evaluate(() => globalThis.zpNavigationPending));
+  await page.evaluate(() => window.desk.openBrowser());
+  await until(async () => (await snapshot()).active);
+  await page.getByLabel("招聘平台", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByLabel("招聘平台", { exact: true }).isDisabled(),
+    true,
+  );
+  await assert.rejects(
+    page.evaluate(() => window.desk.browserPlatform({ platform: "boss" })),
+    /停止/,
+  );
+  state = await until(async () => {
+    const s = await snapshot();
+    return !s.active ? s : false;
+  }, 60000);
+  assert.equal(
+    state.run.status,
+    "completed",
+    JSON.stringify(state.events.slice(-10)),
+  );
+  assert.equal(state.run.platform, "zhaopin");
+  assert.equal(state.run.matched, 2);
+  assert.equal(state.run.attempts, 0);
+  assert.equal(state.attemptsToday, beforeZp.attemptsToday);
+  assert.ok(
+    (await desktop.evaluate(() => globalThis.zhaopinRequests))
+      .slice(zpRequestsBeforeColdStart)
+      .every((route) => route !== "/login"),
+    "Viewing a task's first loading page must not start another login navigation",
+  );
+  for (const expectedSends of [2, 0]) {
+    await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+    await page.getByRole("button", { name: "开始投递", exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByText("智联在线简历 + 平台招呼", { exact: true })
+      .waitFor();
+    await page.getByRole("button", { name: "确认开始", exact: true }).click();
+    await until(async () => (await snapshot()).active);
+    state = await until(async () => {
+      const s = await snapshot();
+      return !s.active ? s : false;
+    }, 60000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.events.slice(-10)),
+    );
+    assert.equal(state.run.sent, expectedSends);
+    assert.equal(state.run.attempts, expectedSends);
+    assert.equal(state.attemptsToday, beforeZp.attemptsToday + 2);
+  }
+  assert.equal(
+    (await desktop.evaluate(() => globalThis.llmRequests)).length,
+    modelCallsBeforeZp,
+  );
+  assert.equal(state.greetings.total, 4);
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "投递记录", exact: true })
+    .click();
+  await page
+    .getByLabel("按招聘平台筛选", { exact: true })
+    .selectOption("zhaopin");
+  await until(async () => (await page.locator("tbody tr").count()) === 2);
+  assert.ok(
+    (await page.locator("tbody tr").allTextContents()).every(
+      (text) => text.includes("智联招聘") && text.includes("已送达"),
+    ),
+  );
+  await page.screenshot({
+    path: path.join(output, "desktop-zhaopin-history-ui.png"),
+  });
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "任务工作台", exact: true })
+    .click();
+  await page.screenshot({
+    path: path.join(output, "desktop-zhaopin-workspace-ui.png"),
+  });
+  await page.getByLabel("本次投递平台", { exact: true }).selectOption("boss");
+  await until(async () => (await snapshot()).browser.platform === "boss");
+  assert.equal(
+    await page.getByLabel("薪资待遇", { exact: false }).inputValue(),
+    "10-20K",
+  );
+  assert.equal(
+    (await snapshot()).config.platform_filters.zhaopin.薪资待遇,
+    "4K-6K",
+  );
+  console.log(
+    "PASS: Zhaopin QR login, synchronized platform selectors, preserved filters, city requirement, zero-send preview, native resume batch and history, no AI requirement, duplicate prevention",
+  );
   assert.deepEqual(errors, []);
   await fs.writeFile(
     path.join(output, "desktop-ui-smoke.json"),
@@ -973,6 +1210,9 @@ async function run() {
         automaticGreetingDiscovery: 2,
         automaticGreetingSends: 2,
         greetingAuditRecords: 4,
+        zhaopinResumeSends: 2,
+        zhaopinPreviewAttempts: 0,
+        isolatedPlatforms: true,
       },
       null,
       2,

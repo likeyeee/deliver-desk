@@ -21,9 +21,13 @@ export default function BrowserPanel({
   action,
   onWorkspace,
   onLogs,
+  onPlatform,
 }) {
   const viewport = useRef(null);
   const browser = state.browser;
+  const platformName =
+    browser.platforms?.find((item) => item.id === browser.platform)?.name ||
+    "BOSS 直聘";
   const tabs = browser.tabs || [];
   const current = tabs.find((tab) => tab.id === browser.activeId);
   const run = state.run;
@@ -66,7 +70,7 @@ export default function BrowserPanel({
     };
   }, [obscured]);
   return (
-    <section className="browser-panel" aria-label="BOSS 内置浏览器">
+    <section className="browser-panel" aria-label="求职浏览器">
       <div className="browser-runbar">
         <div className="browser-progress">
           <strong>
@@ -80,14 +84,16 @@ export default function BrowserPanel({
                     verify: "正在核对送达",
                     diagnose: "正在检查网页",
                   }[run?.mode] || "准备中"
-              : "BOSS 浏览器"}
+              : "求职浏览器"}
           </strong>
           <span>
             {hasProgress
               ? `已尝试 ${run.attempts || 0} / ${run.target} 次 · 确认送达 ${run.sent} 次 · 跳过 ${run.skipped} 个`
               : browser.loggedIn
                 ? "已登录"
-                : "使用 BOSS 直聘 App 扫码登录"}
+                : browser.platform === "zhaopin"
+                  ? "使用微信扫码登录智联招聘"
+                  : "使用 BOSS 直聘 App 扫码登录"}
           </span>
           {hasProgress && (
             <progress
@@ -175,6 +181,23 @@ export default function BrowserPanel({
         ))}
       </div>
       <div className="browser-toolbar">
+        <select
+          aria-label="招聘平台"
+          value={browser.platform || "boss"}
+          disabled={busy || state.active || state.autoReply?.enabled}
+          onChange={(event) => onPlatform(event.target.value)}
+        >
+          {(
+            browser.platforms || [
+              { id: "boss", name: "BOSS 直聘" },
+              { id: "zhaopin", name: "智联招聘" },
+            ]
+          ).map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
         <button
           className="icon-button"
           aria-label="后退"
@@ -200,7 +223,7 @@ export default function BrowserPanel({
           <RotateCw size={16} className={current?.loading ? "spinning" : ""} />
         </button>
         <div className="browser-address" title={current?.url}>
-          {current?.url || "BOSS 直聘"}
+          {current?.url || platformName}
         </div>
         <button
           className="btn"
@@ -229,7 +252,7 @@ export default function BrowserPanel({
           <div className="empty">
             <Monitor size={32} />
             <h3>暂无网页</h3>
-            <p>点击“扫码登录”打开 BOSS 直聘。</p>
+            <p>点击“扫码登录”打开{platformName}。</p>
           </div>
         )}
       </div>

@@ -147,6 +147,11 @@ class DesktopService:
         if method == "saveConfig":
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再修改配置")
+            if (
+                self.monitor_enabled
+                and params["config"].get("platform", "boss") != self.config.platform
+            ):
+                raise ValueError("请先关闭自动回复，再切换平台")
             return self.save(params["config"])
         if method == "resume":
             if (
@@ -179,6 +184,8 @@ class DesktopService:
             if action == "disable":
                 self.stop_monitor()
                 return self.snapshot()
+            if self.config.platform != "boss":
+                raise ValueError("智联招聘使用简历投递；消息回复目前支持 BOSS 直聘")
             if action == "enable":
                 if self.monitor_enabled:
                     return self.snapshot()
@@ -210,6 +217,8 @@ class DesktopService:
                 return {"runId": self.run_id}
             raise ValueError("无效的自动回复操作")
         if method == "reply":
+            if self.config.platform != "boss":
+                raise ValueError("消息回复目前支持 BOSS 直聘，请先切换平台")
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("请先停止当前任务，再处理回复")
             action = params.get("action")
@@ -238,10 +247,13 @@ class DesktopService:
             if is_active(self.directory) or (self.task and not self.task.done()):
                 raise ValueError("已有任务在运行")
             if mode == "verify":
-                self.store.pending_message(params.get("jobId", ""))
+                pending_job, _ = self.store.pending_message(params.get("jobId", ""))
             config = self.config.model_copy(deep=True)
+            if mode == "verify":
+                config.platform = pending_job.platform
             if (
                 mode in {"preview", "send"}
+                and config.platform == "boss"
                 and config.message.mode == "ai"
                 and (not self.resume.document or not self.resume.document.profile)
             ):
@@ -257,7 +269,9 @@ class DesktopService:
                     run_id=self.run_id,
                     mode=mode,
                 )
-                if mode in {"preview", "send"} and config.message.mode == "ai"
+                if mode in {"preview", "send"}
+                and config.platform == "boss"
+                and config.message.mode == "ai"
                 else None
             )
             self.task = asyncio.create_task(

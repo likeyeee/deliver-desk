@@ -218,10 +218,17 @@ export default function ResumePanel({
                 </button>
                 <button
                   className="btn primary"
-                  disabled={locked || textDirty || profileDirty}
+                  disabled={
+                    locked ||
+                    textDirty ||
+                    profileDirty ||
+                    state.config.platform === "zhaopin"
+                  }
                   onClick={onGreeting}
                 >
-                  使用 AI 岗位招呼
+                  {state.config.platform === "zhaopin"
+                    ? "AI 岗位招呼适用于 BOSS"
+                    : "使用 AI 岗位招呼"}
                 </button>
               </div>
             </>

@@ -40,6 +40,7 @@ import GreetingHistory from "./GreetingHistory.jsx";
 import CityPicker from "./CityPicker.jsx";
 
 const api = window.desk;
+const platformNames = { boss: "BOSS 直聘", zhaopin: "智联招聘" };
 const pacePresets = {
   流畅: {
     action_delay: [0.6, 1.4],
@@ -146,6 +147,7 @@ function App() {
     [selected, setSelected] = useState(null),
     [search, setSearch] = useState(""),
     [statusFilter, setStatusFilter] = useState(""),
+    [platformFilter, setPlatformFilter] = useState(""),
     [resolveNote, setResolveNote] = useState("");
   async function refresh() {
     try {
@@ -213,6 +215,13 @@ function App() {
     setPage("browser");
     return url ? api.openJob({ url }) : api.openBrowser();
   }
+  function switchPlatform(platform) {
+    act(async () => {
+      await save();
+      const result = await api.browserPlatform({ platform });
+      setDraft(result);
+    }).catch(() => {});
+  }
   async function save() {
     const clean = structuredClone(draft);
     clean.search.filters = Object.fromEntries(
@@ -252,12 +261,14 @@ function App() {
     locked = busy || active;
   const dirty =
     draft && state && JSON.stringify(draft) !== JSON.stringify(state.config);
-  const greetingBlocked =
-    draft?.message.mode === "ai" &&
-    (!state?.resume?.document?.profile || !state?.llm?.configured);
+  const isZhaopin = draft?.platform === "zhaopin";
+  const greetingBlocked = isZhaopin
+    ? draft?.search.city === "全国"
+    : draft?.message.mode === "ai" &&
+      (!state?.resume?.document?.profile || !state?.llm?.configured);
   const nav = [
     ["workspace", LayoutDashboard, "任务工作台"],
-    ["browser", Monitor, "BOSS 浏览器"],
+    ["browser", Monitor, "求职浏览器"],
     ["replies", MessageSquare, "消息回复"],
     ["resume", FileText, "个人简历"],
     ["models", Sparkles, "模型与人格"],
@@ -269,12 +280,18 @@ function App() {
   const counts = [
     ["已浏览", run?.scanned || 0, "个职位", Search],
     ["符合条件", run?.matched || 0, "个候选", Filter],
-    ["确认送达", run?.sent || 0, "条消息", CheckCheck],
+    [
+      "确认送达",
+      run?.sent || 0,
+      run?.platform === "zhaopin" ? "份简历" : "条消息",
+      CheckCheck,
+    ],
     ["已跳过", run?.skipped || 0, "个职位", ShieldCheck],
   ];
   const rows = (state?.history || []).filter(
     (row) =>
       (!statusFilter || row.status === statusFilter) &&
+      (!platformFilter || (row.platform || "boss") === platformFilter) &&
       (!search ||
         [row.title, row.company, row.message].some((v) => v.includes(search))),
   );
@@ -367,6 +384,7 @@ function App() {
                   action={action}
                   onWorkspace={() => setPage("workspace")}
                   onLogs={() => setPage("logs")}
+                  onPlatform={switchPlatform}
                 />
               )}
               {page === "models" && (
@@ -397,16 +415,25 @@ function App() {
                   }}
                 />
               )}
-              {page === "replies" && (
-                <RepliesPanel
-                  state={state}
-                  locked={locked}
-                  act={act}
-                  saveModel={saveModel}
-                  onSettings={() => setPage("models")}
-                  onBrowser={action(() => openBrowser())}
-                />
-              )}
+              {page === "replies" &&
+                (isZhaopin ? (
+                  <section className="panel">
+                    <Empty
+                      icon={MessageSquare}
+                      title="消息回复支持 BOSS 直聘"
+                      body="智联招聘可在任务工作台自动投递在线简历，平台招呼随简历一起发送。后续聊天请进入智联网页处理。"
+                    />
+                  </section>
+                ) : (
+                  <RepliesPanel
+                    state={state}
+                    locked={locked}
+                    act={act}
+                    saveModel={saveModel}
+                    onSettings={() => setPage("models")}
+                    onBrowser={action(() => openBrowser())}
+                  />
+                ))}
               {page === "greetings" && (
                 <GreetingHistory overview={state.greetings} />
               )}
@@ -414,6 +441,18 @@ function App() {
                 <>
                   <div className="page-heading">
                     <h1>任务工作台</h1>
+                    <select
+                      aria-label="本次投递平台"
+                      value={draft.platform || "boss"}
+                      disabled={locked || state.autoReply?.enabled}
+                      onChange={(e) => switchPlatform(e.target.value)}
+                    >
+                      {Object.entries(platformNames).map(([id, name]) => (
+                        <option key={id} value={id}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
                     <Button
                       icon={Save}
                       disabled={locked || !dirty}
@@ -494,6 +533,11 @@ function App() {
                     </div>
                   </section>
                   <section className="batch-setup" aria-label="本次投递设置">
+                    {isZhaopin && draft.search.city === "全国" && (
+                      <p className="quota-note">
+                        智联当前需要选择具体城市，请在“求职偏好”中选择省份和城市后运行。
+                      </p>
+                    )}
                     <fieldset disabled={locked}>
                       <div className="batch-target">
                         <Field label="本次投递次数">
@@ -631,6 +675,7 @@ function App() {
                           <CityPicker
                             city={draft.search.city}
                             onChange={setCity}
+                            allowNationwide={!isZhaopin}
                           />
                           <Field label="薪资待遇">
                             <select
@@ -642,16 +687,31 @@ function App() {
                                 })
                               }
                             >
-                              {[
-                                "",
-                                "不限",
-                                "3K以下",
-                                "3-5K",
-                                "5-10K",
-                                "10-20K",
-                                "20-50K",
-                                "50K以上",
-                              ].map((v) => (
+                              {(isZhaopin
+                                ? [
+                                    "",
+                                    "不限",
+                                    "4K以下",
+                                    "4K-6K",
+                                    "6K-8K",
+                                    "8K-10K",
+                                    "10K-15K",
+                                    "15K-25K",
+                                    "25K-35K",
+                                    "35K-50K",
+                                    "50K以上",
+                                  ]
+                                : [
+                                    "",
+                                    "不限",
+                                    "3K以下",
+                                    "3-5K",
+                                    "5-10K",
+                                    "10-20K",
+                                    "20-50K",
+                                    "50K以上",
+                                  ]
+                              ).map((v) => (
                                 <option key={v} value={v}>
                                   {v || "使用网站当前条件"}
                                 </option>
@@ -668,18 +728,30 @@ function App() {
                                 })
                               }
                             >
-                              {[
-                                "",
-                                "不限",
-                                "在校生",
-                                "应届生",
-                                "经验不限",
-                                "1年以内",
-                                "1-3年",
-                                "3-5年",
-                                "5-10年",
-                                "10年以上",
-                              ].map((v) => (
+                              {(isZhaopin
+                                ? [
+                                    "",
+                                    "不限",
+                                    "经验不限",
+                                    "1年以下",
+                                    "1-3年",
+                                    "3-5年",
+                                    "5-10年",
+                                    "10年以上",
+                                  ]
+                                : [
+                                    "",
+                                    "不限",
+                                    "在校生",
+                                    "应届生",
+                                    "经验不限",
+                                    "1年以内",
+                                    "1-3年",
+                                    "3-5年",
+                                    "5-10年",
+                                    "10年以上",
+                                  ]
+                              ).map((v) => (
                                 <option key={v} value={v}>
                                   {v || "使用网站当前条件"}
                                 </option>
@@ -696,17 +768,31 @@ function App() {
                                 })
                               }
                             >
-                              {[
-                                "",
-                                "不限",
-                                "初中及以下",
-                                "中专/中技",
-                                "高中",
-                                "大专",
-                                "本科",
-                                "硕士",
-                                "博士",
-                              ].map((v) => (
+                              {(isZhaopin
+                                ? [
+                                    "",
+                                    "不限",
+                                    "初中及以下",
+                                    "高中",
+                                    "中专/中技",
+                                    "大专",
+                                    "本科",
+                                    "硕士",
+                                    "MBA/EMBA",
+                                    "博士",
+                                  ]
+                                : [
+                                    "",
+                                    "不限",
+                                    "初中及以下",
+                                    "中专/中技",
+                                    "高中",
+                                    "大专",
+                                    "本科",
+                                    "硕士",
+                                    "博士",
+                                  ]
+                              ).map((v) => (
                                 <option key={v} value={v}>
                                   {v || "使用网站当前条件"}
                                 </option>
@@ -779,8 +865,18 @@ function App() {
                                 "求职类型",
                                 "职位类型",
                                 "工作区域",
+                                ...(isZhaopin ? ["公司性质"] : []),
                               ].map((label) => (
-                                <Field key={label} label={label}>
+                                <Field
+                                  key={label}
+                                  label={label}
+                                  hint={
+                                    isZhaopin &&
+                                    ["公司行业", "职位类型"].includes(label)
+                                      ? "按网页层级填写：大类 > 子类；选择整个大类可填 大类 > 不限"
+                                      : undefined
+                                  }
+                                >
                                   <input
                                     placeholder="与网页上的选项文字一致"
                                     value={draft.search.filters[label] || ""}
@@ -798,16 +894,40 @@ function App() {
                         </details>
                       </fieldset>
                     </section>
-                    <GreetingPanel
-                      config={draft.message}
-                      state={state}
-                      locked={locked || state.autoReply?.enabled}
-                      update={(key, value) => update("message", key, value)}
-                      template={template}
-                      onResume={() => setPage("resume")}
-                      onModels={() => setPage("models")}
-                      onHistory={() => setPage("greetings")}
-                    />
+                    {isZhaopin ? (
+                      <section className="panel message-panel">
+                        <div className="panel-heading">
+                          <div>
+                            <FileText size={18} />
+                            <h2>智联简历投递</h2>
+                          </div>
+                        </div>
+                        <div className="platform-delivery-info">
+                          <p>使用你在智联招聘账户中保存的在线简历。</p>
+                          <p>
+                            “立即投递”会发送简历和智联平台招呼。成功后记录结果，再处理下一个符合条件的职位。
+                          </p>
+                          <p>已投递、已沟通及结果待核对的职位会自动跳过。</p>
+                          <Button
+                            icon={Monitor}
+                            onClick={action(() => openBrowser())}
+                          >
+                            查看智联招聘
+                          </Button>
+                        </div>
+                      </section>
+                    ) : (
+                      <GreetingPanel
+                        config={draft.message}
+                        state={state}
+                        locked={locked || state.autoReply?.enabled}
+                        update={(key, value) => update("message", key, value)}
+                        template={template}
+                        onResume={() => setPage("resume")}
+                        onModels={() => setPage("models")}
+                        onHistory={() => setPage("greetings")}
+                      />
+                    )}
                   </div>
                   <section className="panel limits">
                     <div className="panel-heading">
@@ -914,7 +1034,10 @@ function App() {
                               <tr key={row.job_id}>
                                 <td>
                                   <b>{row.title}</b>
-                                  <small>{row.company}</small>
+                                  <small>
+                                    {row.company} ·{" "}
+                                    {platformNames[row.platform || "boss"]}
+                                  </small>
                                 </td>
                                 <td>{row.location || "—"}</td>
                                 <td className="salary">
@@ -962,6 +1085,18 @@ function App() {
                   </div>
                   <section className="panel">
                     <div className="table-toolbar">
+                      <select
+                        aria-label="按招聘平台筛选"
+                        value={platformFilter}
+                        onChange={(e) => setPlatformFilter(e.target.value)}
+                      >
+                        <option value="">全部平台</option>
+                        {Object.entries(platformNames).map(([id, name]) => (
+                          <option key={id} value={id}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
                       <div className="search-box">
                         <Search size={17} />
                         <input
@@ -1007,7 +1142,10 @@ function App() {
                               <tr key={row.job_id}>
                                 <td>
                                   <b>{row.title}</b>
-                                  <small>{row.company}</small>
+                                  <small>
+                                    {row.company} ·{" "}
+                                    {platformNames[row.platform || "boss"]}
+                                  </small>
                                 </td>
                                 <td>
                                   <Badge value={row.status} />
@@ -1033,7 +1171,7 @@ function App() {
                       <Empty
                         icon={History}
                         title={
-                          search || statusFilter
+                          search || statusFilter || platformFilter
                             ? "没有符合条件的记录"
                             : "暂无投递记录"
                         }
@@ -1082,7 +1220,7 @@ function App() {
                         <Monitor size={22} />
                       </div>
                       <div>
-                        <h3>BOSS 直聘登录</h3>
+                        <h3>{platformNames[draft.platform || "boss"]}登录</h3>
                         <p>
                           {state.browser.loggedIn
                             ? "已登录"
@@ -1090,7 +1228,9 @@ function App() {
                         </p>
                       </div>
                       <Button disabled={locked} onClick={() => start("login")}>
-                        {state.browser.loggedIn ? "检查登录" : "登录 BOSS 直聘"}
+                        {state.browser.loggedIn
+                          ? "检查登录"
+                          : `登录${platformNames[draft.platform || "boss"]}`}
                       </Button>
                     </div>
                     <div className="setting-row">
@@ -1243,8 +1383,14 @@ function App() {
               <Send size={24} />
             </div>
             <h2 id="confirm-title">确认本次投递范围</h2>
-            <p>将向符合以下条件的招聘方发起沟通。</p>
+            <p>
+              {isZhaopin
+                ? "将向符合以下条件的职位投递智联在线简历和平台招呼。"
+                : "将向符合以下条件的招聘方发起沟通。"}
+            </p>
             <dl>
+              <dt>招聘平台</dt>
+              <dd>{platformNames[draft.platform || "boss"]}</dd>
               <dt>搜索职位</dt>
               <dd>{draft.search.keywords.join(" / ")}</dd>
               <dt>工作城市</dt>
@@ -1260,13 +1406,15 @@ function App() {
               </dd>
               <dt>沟通方式</dt>
               <dd>
-                {draft.message.mode === "custom"
-                  ? "自定义招呼"
-                  : draft.message.mode === "ai"
-                    ? "AI 岗位招呼"
-                    : "仅建立平台沟通"}
+                {isZhaopin
+                  ? "智联在线简历 + 平台招呼"
+                  : draft.message.mode === "custom"
+                    ? "自定义招呼"
+                    : draft.message.mode === "ai"
+                      ? "AI 岗位招呼"
+                      : "仅建立平台沟通"}
               </dd>
-              {draft.message.mode === "ai" && (
+              {!isZhaopin && draft.message.mode === "ai" && (
                 <>
                   <dt>个人简历</dt>
                   <dd>{state.resume?.document?.source_name || "尚未分析"}</dd>
@@ -1274,11 +1422,13 @@ function App() {
               )}
             </dl>
             <div className="confirm-message">
-              {draft.message.mode === "custom"
-                ? template
-                : draft.message.mode === "ai"
-                  ? "按各岗位详情结合简历生成招呼。简历正文、特点和职位资料将发送至 DeepSeek；生成失败时停止。"
-                  : "仅建立沟通，不发送自定义模板。"}
+              {isZhaopin
+                ? "使用智联账户的在线简历，网站发送平台招呼。请先在智联网站确认简历内容。"
+                : draft.message.mode === "custom"
+                  ? template
+                  : draft.message.mode === "ai"
+                    ? "按各岗位详情结合简历生成招呼。简历正文、特点和职位资料将发送至 DeepSeek；生成失败时停止。"
+                    : "仅建立沟通，不发送自定义模板。"}
             </div>
             <div className="modal-actions">
               <Button onClick={() => setConfirm(false)}>返回修改</Button>

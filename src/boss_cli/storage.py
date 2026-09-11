@@ -105,6 +105,8 @@ class Store:
         for name in ("target", "attempts"):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
+        if "platform" not in columns:
+            self.db.execute("ALTER TABLE runs ADD COLUMN platform TEXT NOT NULL DEFAULT 'boss'")
         reply_columns = {row[1] for row in self.db.execute("PRAGMA table_info(replies)")}
         for name, definition in (
             ("source", "TEXT NOT NULL DEFAULT 'manual'"),
@@ -112,7 +114,7 @@ class Store:
         ):
             if name not in reply_columns:
                 self.db.execute(f"ALTER TABLE replies ADD COLUMN {name} {definition}")
-        self.db.execute("PRAGMA user_version=5")
+        self.db.execute("PRAGMA user_version=6")
 
     def close(self):
         self.db.close()
@@ -154,6 +156,7 @@ class Store:
             "note",
             "target",
             "attempts",
+            "platform",
         }
         if not values or set(values) - allowed:
             raise ValueError("非法任务字段")
@@ -303,6 +306,8 @@ class Store:
         }
 
     def reply_job(self, job_id: str) -> Job:
+        if job_id.startswith("zhaopin:"):
+            raise ValueError("消息回复目前支持 BOSS 直聘，智联后续聊天请在网页处理")
         row = self.db.execute(
             """SELECT j.data FROM jobs j LEFT JOIN deliveries d USING(job_id)
             LEFT JOIN reply_members m USING(job_id) WHERE j.job_id=?
@@ -315,6 +320,8 @@ class Store:
 
     def mark_reply_contact(self, job: Job):
         """Discover an existing inbox conversation without inventing a delivery record."""
+        if job.platform != "boss" or job.job_id.startswith("zhaopin:"):
+            raise ValueError("消息联系人仅支持 BOSS 直聘职位")
         known = self.db.execute("SELECT data FROM jobs WHERE job_id=?", (job.job_id,)).fetchone()
         data = job.as_dict()
         if known:
@@ -334,7 +341,8 @@ class Store:
         for row in self.db.execute(
             """SELECT j.data,COALESCE(m.last_seen_at,d.updated_at) AS updated_at FROM jobs j
             LEFT JOIN deliveries d USING(job_id) LEFT JOIN reply_members m USING(job_id)
-            WHERE d.status IN ('sent','contacted','partial','unknown') OR m.job_id IS NOT NULL
+            WHERE j.job_id NOT LIKE 'zhaopin:%'
+            AND (d.status IN ('sent','contacted','partial','unknown') OR m.job_id IS NOT NULL)
             ORDER BY updated_at DESC LIMIT 500"""
         ):
             data = json.loads(row["data"])
@@ -534,12 +542,12 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
-    def delivery(self, job_id: str, status: str, note: str):
+    def delivery(self, job_id: str, status: str, note: str, *, message: str | None = None):
         if status not in DELIVERY_STATES:
             raise ValueError("非法投递状态")
         self.db.execute(
-            "UPDATE deliveries SET status=?,note=?,updated_at=? WHERE job_id=?",
-            (status, note, now(), job_id),
+            "UPDATE deliveries SET status=?,note=?,message=COALESCE(?,message),updated_at=? WHERE job_id=?",
+            (status, note, message, now(), job_id),
         )
 
     def mark_contacted(self, job: Job, run_id: str):
@@ -595,7 +603,8 @@ class Store:
         return [
             dict(row)
             for row in self.db.execute(
-                f"""SELECT d.*,j.title,j.company,j.url,j.location,j.salary
+                f"""SELECT d.*,j.title,j.company,j.url,j.location,j.salary,
+          CASE WHEN j.job_id LIKE 'zhaopin:%' THEN 'zhaopin' ELSE 'boss' END AS platform
           FROM deliveries d JOIN jobs j USING(job_id) {condition} ORDER BY d.updated_at DESC LIMIT ?""",
                 params,
             )
@@ -605,7 +614,9 @@ class Store:
         return [
             dict(r)
             for r in self.db.execute(
-                "SELECT job_id,title,company,location,salary,url,updated_at FROM jobs ORDER BY updated_at DESC LIMIT ?",
+                "SELECT job_id,title,company,location,salary,url,updated_at, "
+                "CASE WHEN job_id LIKE 'zhaopin:%' THEN 'zhaopin' ELSE 'boss' END AS platform "
+                "FROM jobs ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             )
         ]

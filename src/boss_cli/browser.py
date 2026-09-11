@@ -74,6 +74,7 @@ class ConversationChanged(LayoutChanged):
 class SendResult:
     status: str
     note: str
+    message: str | None = None
 
 
 def clean_error(error: BaseException) -> str:
@@ -203,12 +204,23 @@ class BrowserSession:
                     (
                         c
                         for c in self.browser.contexts
-                        if any(urlsplit(p.url).hostname == "www.zhipin.com" for p in c.pages)
+                        if any(
+                            urlsplit(p.url).hostname
+                            == (
+                                "www.zhaopin.com"
+                                if self.config.platform == "zhaopin"
+                                else "www.zhipin.com"
+                            )
+                            for p in c.pages
+                        )
                     ),
                     self.browser.contexts[0],
                 )
             else:
-                profile = private_dir(self.directory / "profile")
+                profile = private_dir(
+                    self.directory
+                    / ("profile-zhaopin" if self.config.platform == "zhaopin" else "profile")
+                )
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     str(profile),
                     channel="chrome" if cfg.channel == "chrome" else None,
@@ -285,6 +297,8 @@ class BrowserSession:
 
 
 class BossAdapter:
+    jobs_url = JOBS_URL
+
     def __init__(self, session: BrowserSession, config: Config, control: Controller):
         self.session, self.config, self.control = session, config, control
         self.page = session.page

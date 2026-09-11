@@ -197,9 +197,33 @@ app
     );
     await new Promise((resolve) => setTimeout(resolve, 500));
     await capture("greeting-detail");
+    config.platform = "zhaopin";
+    config.search.filters = {
+      薪资待遇: "10K-15K",
+      工作经验: "1-3年",
+      学历要求: "本科",
+    };
+    state.browser.platform = "zhaopin";
+    state.run.platform = "zhaopin";
+    state.run.note = "预览完成，请核对职位范围和智联在线简历后开始投递。";
+    state.jobs = state.jobs.map((job) => ({
+      ...job,
+      platform: "zhaopin",
+      job_id: "zhaopin:" + job.job_id,
+      salary: "10000-15000元",
+    }));
+    window.setContentSize(1360, 1420);
+    await window.loadFile(path.join(root, "ui-dist/index.html"));
+    await window.webContents.executeJavaScript(`new Promise((resolve,reject)=>{
+      const end=Date.now()+10000;const timer=setInterval(()=>{
+        if(document.querySelector('.platform-delivery-info')){clearInterval(timer);resolve();}
+        else if(Date.now()>end){clearInterval(timer);reject(Error('Zhaopin settings failed to render'));}
+      },50);
+    })`);
+    await capture("zhaopin-workspace");
     window.destroy();
     console.log(
-      "Created workspace, resume and AI greeting screenshots from synthetic data",
+      "Created BOSS and Zhaopin workspace, resume and AI greeting screenshots from synthetic data",
     );
     app.quit();
   })

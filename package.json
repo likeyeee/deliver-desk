@@ -1,8 +1,8 @@
 {
   "name": "deliver-desk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
-  "description": "BOSS 直聘桌面求职工作台：职位筛选、沟通与本地历史",
+  "description": "支持 BOSS 直聘与智联招聘的桌面求职工作台：职位筛选、沟通、简历投递与本地历史",
   "author": "DeliverDesk",
   "license": "UNLICENSED",
   "main": "desktop/main.cjs",

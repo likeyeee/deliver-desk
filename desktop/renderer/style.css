@@ -231,6 +231,14 @@ main {
   margin: 0 0 27px;
   gap: 15px;
 }
+.page-heading > h1 {
+  flex-shrink: 0;
+}
+.page-heading > select {
+  width: 160px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
 h1 {
   font-size: 26px;
   font-weight: 650;
@@ -1194,6 +1202,13 @@ progress::-webkit-progress-value {
   padding: 6px 9px;
   font-size: 11px;
 }
+.browser-toolbar > select {
+  width: 140px;
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
 .browser-address {
   flex: 1;
   min-width: 80px;
@@ -1699,4 +1714,9 @@ progress::-webkit-progress-value {
   .reply-compose {
     padding: 18px;
   }
+}
+.platform-delivery-info {
+  padding: 4px 22px 24px;
+  line-height: 1.8;
+  color: #58677a;
 }

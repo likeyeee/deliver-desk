@@ -12,6 +12,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { BrowserManager } = require("./browser.cjs");
+const { platformForURL } = require("./platforms.cjs");
 const { Backend } = require("./backend.cjs");
 const { KeyVault, DeepSeek } = require("./llm.cjs");
 
@@ -138,6 +139,7 @@ else {
             const state = await backend.request("snapshot");
             if (
               state.config.message.mode === "ai" &&
+              state.config.platform !== "zhaopin" &&
               !vault.status().configured
             )
               throw Error("请先在模型与人格中保存 DeepSeek API Key");
@@ -184,7 +186,44 @@ else {
           throw Error("请先在模型与人格中保存 DeepSeek API Key");
         return backend.request("autoReply", params);
       });
-      handle("openBrowser", () => browser.showOrOpen());
+      handle("openBrowser", async () => {
+        const state = await backend.request("snapshot");
+        if (state.active) {
+          // Opening the browser while the first task page is still loading
+          // must not replace its navigation with a new login request.
+          window.show();
+          window.focus();
+          return browser.lastId;
+        }
+        return browser.showOrOpen(undefined, state.config.platform || "boss");
+      });
+      handle("browserPlatform", async ({ platform }) => {
+        const state = await backend.request("snapshot");
+        if (state.active || state.autoReply?.enabled)
+          throw Error("请先停止当前任务和自动回复，再切换平台");
+        const saved = state.config.platform_filters || {};
+        const result =
+          platform === state.config.platform
+            ? state.config
+            : await backend.request("saveConfig", {
+                config: {
+                  ...state.config,
+                  platform,
+                  platform_filters: {
+                    ...saved,
+                    [state.config.platform || "boss"]:
+                      state.config.search.filters,
+                  },
+                  search: {
+                    ...state.config.search,
+                    filters: saved[platform] || {},
+                  },
+                },
+              });
+        browser.selectPlatform(platform);
+        await browser.showOrOpen();
+        return result;
+      });
       handle("browserViewport", (params) => browser.setViewport(params));
       handle("browserTab", async ({ id, close }) => {
         if (close) {
@@ -201,14 +240,14 @@ else {
       });
       handle("openJob", async ({ url }) => {
         if (
-          !/^https:\/\/www\.zhipin\.com\/job_detail\/[A-Za-z0-9_~\-]+\.html$/.test(
+          !/^https:\/\/(?:www\.zhipin\.com\/job_detail\/[A-Za-z0-9_~\-]+\.html|www\.zhaopin\.com\/jobdetail\/[A-Za-z0-9_-]+\.htm)$/.test(
             url,
           )
         )
           throw Error("无效的职位链接");
         const state = await backend.request("snapshot");
         if (state.active) throw Error("请先暂停并停止任务，再手动打开其他职位");
-        return browser.showOrOpen(url);
+        return browser.showOrOpen(url, platformForURL(url));
       });
       handle("openData", () => shell.openPath(dataDir));
       handle("exportHistory", async () => {
@@ -220,6 +259,7 @@ else {
         if (canceled) return null;
         const rows = await backend.request("export");
         const keys = [
+          "platform",
           "created_at",
           "title",
           "company",
@@ -307,6 +347,9 @@ else {
             ],
           },
         ]),
+      );
+      browser.selectPlatform(
+        (await backend.request("snapshot")).config.platform || "boss",
       );
       await createWindow();
     })

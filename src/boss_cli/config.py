@@ -70,6 +70,7 @@ class SearchConfig(StrictModel):
             "学历要求",
             "公司行业",
             "公司规模",
+            "公司性质",
             "融资阶段",
         }
         if set(values) - allowed or any(not v.strip() for v in values.values()):
@@ -183,6 +184,8 @@ class AutoReplyConfig(StrictModel):
 
 
 class Config(StrictModel):
+    platform: Literal["boss", "zhaopin"] = "boss"
+    platform_filters: dict[Literal["boss", "zhaopin"], dict[str, str]] = Field(default_factory=dict)
     state_dir: str = ".boss-cli"
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)

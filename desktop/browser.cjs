@@ -1,17 +1,11 @@
 const { WebContentsView, session } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { platforms, platformForURL } = require("./platforms.cjs");
 
-function allowedURL(value) {
-  try {
-    const u = new URL(value);
-    return (
-      u.protocol === "https:" &&
-      (u.hostname === "zhipin.com" || u.hostname.endsWith(".zhipin.com"))
-    );
-  } catch {
-    return false;
-  }
+function allowedURL(value, platform) {
+  const found = platformForURL(value);
+  return Boolean(found && (!platform || found === platform));
 }
 
 class BrowserManager {
@@ -22,20 +16,49 @@ class BrowserManager {
     this.fits = new Map();
     this.nextId = 1;
     this.partition = options.partition || "persist:boss";
+    this.platform = "boss";
+    this.pagePlatforms = new Map();
+    this.platformTabs = new Map();
+    this.sessions = new Map();
     this.host = null;
     this.visible = false;
     this.insets = { left: 220, top: 220, right: 16, bottom: 16 };
     this.errors = new Map();
     this.taskPages = new Set();
     this.backgroundPopups = new Set();
-    this.session = session.fromPartition(this.partition);
-    this.session.setPermissionRequestHandler((_, __, callback) =>
-      callback(false),
-    );
-    this.session.setPermissionCheckHandler(() => false);
-    this.session.on("will-download", (event) => event.preventDefault());
+    this.session = this.platformSession("boss");
     this.lastId = null;
     if (options.host) this.attach(options.host, options.shellView);
+  }
+  platformSession(platform) {
+    if (!platforms[platform]) throw Error("不支持的招聘平台");
+    if (this.sessions.has(platform)) return this.sessions.get(platform);
+    const partition =
+      platform === "boss"
+        ? this.partition
+        : this.partition === "persist:boss"
+          ? "persist:zhaopin"
+          : `${this.partition}-${platform}`;
+    const browserSession = session.fromPartition(partition);
+    browserSession.setPermissionRequestHandler((_, __, callback) =>
+      callback(false),
+    );
+    browserSession.setPermissionCheckHandler(() => false);
+    browserSession.on("will-download", (event) => event.preventDefault());
+    this.sessions.set(platform, browserSession);
+    return browserSession;
+  }
+  selectPlatform(platform) {
+    if (!platforms[platform]) throw Error("不支持的招聘平台");
+    this.platform = platform;
+    this.lastId =
+      this.platformTabs.get(platform) ||
+      [...this.views.keys()].find(
+        (id) => this.pagePlatforms.get(id) === platform,
+      ) ||
+      null;
+    this.layout();
+    return platform;
   }
   attach(host, shellView) {
     this.host = host;
@@ -95,6 +118,8 @@ class BrowserManager {
   }
   activate(id, focus = false) {
     const view = this.get(id);
+    this.platform = this.pagePlatforms.get(id);
+    this.platformTabs.set(this.platform, id);
     if (this.lastId !== id) {
       this.lastId = id;
       this.layout();
@@ -193,9 +218,9 @@ class BrowserManager {
       });
     return state.pending;
   }
-  preferences() {
+  preferences(platform = this.platform) {
     return {
-      partition: this.partition,
+      session: this.platformSession(platform),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -203,9 +228,11 @@ class BrowserManager {
       backgroundThrottling: false,
     };
   }
-  register(view, parent) {
+  register(view, parent, platform = this.platform) {
+    if (parent) platform = this.pagePlatforms.get(parent);
     const id = String(this.nextId++);
     this.views.set(id, view);
+    this.pagePlatforms.set(id, platform);
     this.fits.set(id, {
       minimumWidth: 0,
       revision: 0,
@@ -213,7 +240,11 @@ class BrowserManager {
       pending: null,
     });
     view.webContents.setZoomMode("isolated");
-    if (!parent || !this.backgroundPopups.has(parent)) this.lastId = id;
+    if (!parent || !this.backgroundPopups.has(parent)) {
+      this.platform = platform;
+      this.lastId = id;
+      this.platformTabs.set(platform, id);
+    }
     this.host.contentView.addChildView(view);
     this.layout();
     const wc = view.webContents;
@@ -234,10 +265,20 @@ class BrowserManager {
       }
     });
     wc.on("will-navigate", (event, url) => {
-      if (url !== "about:blank" && !allowedURL(url)) event.preventDefault();
+      if (url !== "about:blank" && !allowedURL(url, platform)) {
+        event.preventDefault();
+        const secure = url.replace(/^http:/, "https:");
+        if (
+          platform === "zhaopin" &&
+          secure !== url &&
+          allowedURL(secure, platform)
+        )
+          wc.loadURL(secure).catch(() => {});
+      }
     });
     wc.on("will-redirect", (event, url) => {
-      if (url !== "about:blank" && !allowedURL(url)) event.preventDefault();
+      if (url !== "about:blank" && !allowedURL(url, platform))
+        event.preventDefault();
     });
     wc.on("content-bounds-updated", (event) => event.preventDefault());
     wc.on("did-start-navigation", (_, __, inPlace, main) => {
@@ -254,17 +295,33 @@ class BrowserManager {
       this.errors.set(id, "网页进程已退出，请停止任务后重新加载。"),
     );
     wc.setWindowOpenHandler((details) => {
-      if (details.url !== "about:blank" && !allowedURL(details.url))
+      const secure = details.url.replace(/^http:/, "https:");
+      if (
+        platform === "zhaopin" &&
+        secure !== details.url &&
+        allowedURL(secure, platform)
+      ) {
+        const child = new WebContentsView({
+          webPreferences: this.preferences(platform),
+        });
+        const created = this.register(child, id);
+        if (this.taskPages.has(id)) this.taskPages.add(created.id);
+        child.webContents.loadURL(secure).catch(() => {});
+        return { action: "deny" };
+      }
+      if (details.url !== "about:blank" && !allowedURL(details.url, platform))
         return { action: "deny" };
       return {
         action: "allow",
-        overrideBrowserWindowOptions: { webPreferences: this.preferences() },
+        overrideBrowserWindowOptions: {
+          webPreferences: this.preferences(platform),
+        },
         createWindow: (options) => {
           const child = new WebContentsView({
             ...options,
             webPreferences: {
               ...options.webPreferences,
-              ...this.preferences(),
+              ...this.preferences(platform),
             },
           });
           const created = this.register(child, id);
@@ -279,12 +336,14 @@ class BrowserManager {
       if (this.host && !this.host.isDestroyed())
         this.host.contentView.removeChildView(view);
       this.views.delete(id);
+      this.pagePlatforms.delete(id);
+      if (this.platformTabs.get(platform) === id)
+        this.platformTabs.delete(platform);
       this.fits.delete(id);
       this.taskPages.delete(id);
       this.backgroundPopups.delete(id);
       this.errors.delete(id);
-      if (this.lastId === id)
-        this.lastId = [...this.views.keys()].at(-1) || null;
+      if (this.lastId === id) this.selectPlatform(platform);
       this.layout();
       this.emit({ kind: "browserEvent", event: "closed", page: id });
     });
@@ -298,13 +357,13 @@ class BrowserManager {
       });
     return { id, url: wc.getURL() || "about:blank" };
   }
-  create() {
+  create(platform = this.platform) {
     if (!this.host || this.host.isDestroyed())
       throw Error("工作台窗口尚未就绪");
     const view = new WebContentsView({
-      webPreferences: this.preferences(),
+      webPreferences: this.preferences(platform),
     });
-    return this.register(view);
+    return this.register(view, undefined, platform);
   }
   get(id) {
     const view = this.views.get(id);
@@ -312,52 +371,86 @@ class BrowserManager {
       throw Error("浏览器页面已关闭");
     return view;
   }
-  async showOrOpen(url) {
+  async showOrOpen(url, platform = platformForURL(url) || this.platform) {
+    if (url && !allowedURL(url, platform)) throw Error("无效的招聘网站地址");
+    if (platform !== this.platform) this.selectPlatform(platform);
     let id = this.views.has(this.lastId)
       ? this.lastId
-      : this.views.keys().next().value;
-    if (!id) id = this.create().id;
+      : [...this.views.keys()].find(
+          (id) => this.pagePlatforms.get(id) === platform,
+        );
+    if (!id) id = this.create(platform).id;
     this.activate(id, true);
     this.host.show();
     this.host.focus();
     if (url || !this.get(id).webContents.getURL()) {
+      const targetURL = url || platforms[platform].login;
       await this.command("goto", {
         page: id,
-        url: url || "https://www.zhipin.com/web/user/?ka=header-login",
+        url: targetURL,
       });
+      if (platform === "zhaopin" && targetURL === platforms.zhaopin.login)
+        await this.prepareLogin(id);
     }
     return id;
   }
+  async prepareLogin(id) {
+    const wc = this.get(id).webContents;
+    for (let pass = 0; pass < 12; pass++) {
+      if (!wc.getURL().startsWith(platforms.zhaopin.login)) return;
+      const point = await wc.executeJavaScript(`(() => {
+        const e=document.querySelector('.zppp-panel-normal-bar__img');
+        if(!e?.getClientRects().length)return null;
+        const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
+        const hit=document.elementFromPoint(x,y);
+        if(hit!==e && !e.contains(hit))return null;
+        const target=crypto.randomUUID();
+        e[Symbol.for('deliverdesk.clickTarget')]=target;
+        return {x,y,target};
+      })()`);
+      if (point) {
+        await this.command("click", { page: id, ...point });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
   async command(method, params) {
     if (method === "primary") {
-      const retained = this.views.has(params.keep) ? params.keep : this.lastId;
+      const platform = params.platform || "boss";
+      this.selectPlatform(platform);
+      const matches = (id) =>
+        this.views.has(id) && this.pagePlatforms.get(id) === platform;
+      const retained = matches(params.keep) ? params.keep : this.lastId;
       const id =
         params.preferCurrent && this.views.has(retained)
           ? retained
-          : [...this.views.keys()][0];
+          : [...this.views.keys()].find(matches);
       for (const managedId of [...this.taskPages]) {
         if (
           !params.preferCurrent &&
+          this.pagePlatforms.get(managedId) === platform &&
           managedId !== id &&
           managedId !== params.keep &&
           this.views.has(managedId)
         )
           this.get(managedId).webContents.close({ waitForBeforeUnload: false });
       }
-      if (id) this.activate(this.views.has(params.keep) ? params.keep : id);
+      if (id) this.activate(matches(params.keep) ? params.keep : id);
       return id
         ? { id, url: this.get(id).webContents.getURL() }
-        : this.create();
+        : this.create(platform);
     }
     if (method === "new") {
-      const created = this.create();
+      const created = this.create(params.platform || this.platform);
       this.taskPages.add(created.id);
       return created;
     }
     const wc = this.get(params.page).webContents;
     switch (method) {
       case "goto": {
-        if (!allowedURL(params.url)) throw Error("只允许打开 BOSS 直聘网页");
+        if (!allowedURL(params.url, this.pagePlatforms.get(params.page)))
+          throw Error("只能在对应平台的会话中打开招聘网页");
         this.activate(params.page);
         // Resolve when the DOM is ready. Images and long-lived resources do not block the adapter.
         await new Promise((resolve, reject) => {
@@ -423,7 +516,7 @@ class BrowserManager {
             let e=document.elementFromPoint(${cssPoint.x},${cssPoint.y});
             while(e) {
               if(e[Symbol.for('deliverdesk.clickTarget')]===${JSON.stringify(params.target)})
-                return !e.disabled && e.getAttribute('aria-disabled')!=='true';
+                return !e.disabled && e.getAttribute('aria-disabled')!=='true' && (!e[Symbol.for('deliverdesk.actionGuard')] || e[Symbol.for('deliverdesk.actionGuard')]());
               e=e.parentElement;
             }
             return false;
@@ -484,17 +577,29 @@ class BrowserManager {
     }
   }
   async status() {
-    const loginChecks = [...this.views.values()].map(async (view) => {
-      try {
-        if (new URL(view.webContents.getURL()).hostname !== "www.zhipin.com")
+    const checkedPlatform = this.platform;
+    const loginChecks = [...this.views]
+      .filter(([id]) => this.pagePlatforms.get(id) === checkedPlatform)
+      .map(async ([, view]) => {
+        try {
+          if (checkedPlatform === "zhaopin") {
+            if (
+              new URL(view.webContents.getURL()).hostname !== "www.zhaopin.com"
+            )
+              return false;
+            return await view.webContents.executeJavaScript(
+              `Array.from(document.querySelectorAll('.c-login__top__name')).some(e=>e.getClientRects().length && e.innerText.trim())`,
+            );
+          }
+          if (new URL(view.webContents.getURL()).hostname !== "www.zhipin.com")
+            return false;
+          return await view.webContents.executeJavaScript(
+            `Array.from(document.querySelectorAll('a[href*="/web/geek/recommend"]')).some(e=>e.getClientRects().length && e.innerText.trim() && e.innerText.trim()!=='推荐')`,
+          );
+        } catch {
           return false;
-        return await view.webContents.executeJavaScript(
-          `Array.from(document.querySelectorAll('a[href*="/web/geek/recommend"]')).some(e=>e.getClientRects().length && e.innerText.trim() && e.innerText.trim()!=='推荐')`,
-        );
-      } catch {
-        return false;
-      }
-    });
+        }
+      });
     // Loading web content must not hold up pause/stop controls or the UI snapshot.
     let timer;
     const checks = await Promise.race([
@@ -504,33 +609,38 @@ class BrowserManager {
       }),
     ]);
     clearTimeout(timer);
-    if (checks) this.loggedIn = checks.some(Boolean);
-    const loggedIn = this.loggedIn || false;
+    this.logins ||= {};
+    if (checks) this.logins[checkedPlatform] = checks.some(Boolean);
+    const loggedIn = this.logins[this.platform] || false;
     return {
+      platform: this.platform,
+      platforms: Object.entries(platforms).map(([id, item]) => ({
+        id,
+        name: item.name,
+      })),
       open: this.views.size,
       loggedIn,
       activeId: this.lastId,
-      tabs: [...this.views].map(([id, view]) => {
-        const wc = view.webContents;
-        return {
-          id,
-          title: wc.getTitle() || "BOSS 直聘",
-          url: wc.getURL().split(/[?#]/)[0],
-          loading: wc.isLoadingMainFrame(),
-          error: this.errors.get(id) || "",
-          canGoBack: wc.navigationHistory.canGoBack(),
-          canGoForward: wc.navigationHistory.canGoForward(),
-        };
-      }),
+      tabs: [...this.views]
+        .filter(([id]) => this.pagePlatforms.get(id) === this.platform)
+        .map(([id, view]) => {
+          const wc = view.webContents;
+          return {
+            id,
+            platform: this.pagePlatforms.get(id),
+            title: wc.getTitle() || platforms[this.platform].name,
+            url: wc.getURL().split(/[?#]/)[0],
+            loading: wc.isLoadingMainFrame(),
+            error: this.errors.get(id) || "",
+            canGoBack: wc.navigationHistory.canGoBack(),
+            canGoForward: wc.navigationHistory.canGoForward(),
+          };
+        }),
     };
   }
   async navigate(action) {
     if (["login", "jobs"].includes(action))
-      return this.showOrOpen(
-        action === "login"
-          ? "https://www.zhipin.com/web/user/?ka=header-login"
-          : "https://www.zhipin.com/web/geek/jobs",
-      );
+      return this.showOrOpen(platforms[this.platform][action]);
     const wc = this.get(this.lastId).webContents;
     if (action === "back" && wc.navigationHistory.canGoBack())
       wc.navigationHistory.goBack();

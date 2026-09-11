@@ -471,7 +471,7 @@ def test_greeting_recovery_pagination_and_readonly_service(config, store, job):
     assert len(first["items"]) == 50 and len(second["items"]) == 3
     assert second["nextCursor"] is None
     assert len({row["id"] for row in first["items"] + second["items"]}) == 53
-    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_legacy_database_upgrade_keeps_delivery_history_and_adds_greeting_audit(tmp_path, job):
@@ -492,7 +492,7 @@ def test_legacy_database_upgrade_keeps_delivery_history_and_adds_greeting_audit(
     assert upgraded.history()[0]["message"] == "原有招呼"
     assert upgraded.blocked(job.job_id) == "sent"
     assert upgraded.greeting_history()["items"] == []
-    assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 6
     upgraded.close()
 
 

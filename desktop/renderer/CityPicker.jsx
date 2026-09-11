@@ -2,9 +2,11 @@ import React from "react";
 import regions from "./data/regions.json";
 
 const nationwide = { name: "全国", cities: ["全国"] };
-const provinces = [nationwide, ...regions.provinces];
-
-export default function CityPicker({ city, onChange }) {
+export default function CityPicker({ city, onChange, allowNationwide = true }) {
+  const provinces = [
+    ...(allowNationwide ? [nationwide] : []),
+    ...regions.provinces,
+  ];
   // Derive the province from the existing city setting so older configurations
   // and imports keep their destination without a second, conflicting value.
   const province = provinces.find((item) => item.cities.includes(city));
@@ -23,7 +25,11 @@ export default function CityPicker({ city, onChange }) {
             if (next) onChange(next.cities[0]);
           }}
         >
-          {!province && <option value="saved-city">已保存城市</option>}
+          {!province && (
+            <option value="saved-city">
+              {city === "全国" ? "请选择具体城市" : "已保存城市"}
+            </option>
+          )}
           {provinces.map((item) => (
             <option key={item.name} value={item.name}>
               {item.name}
