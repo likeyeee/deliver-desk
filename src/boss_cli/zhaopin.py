@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .browser import BossAdapter, LayoutChanged, NeedsAttention, SendResult
 from .models import Job, canonical_job_url
+from .zhaopin_greetings import ZhaopinGreetings
 
 JOBS_URL = "https://www.zhaopin.com/jobs/?pageMode=search"
 LOGIN_URL = "https://passport.zhaopin.com/login"
@@ -60,6 +61,7 @@ class ZhaopinAdapter(BossAdapter):
         super().__init__(session, config, control)
         self.card_cache = {}
         self.keyword = None
+        self.greetings = ZhaopinGreetings(self)
         self.selectors = {
             "profile": ".c-login__top__name",
             "search_input": ".query-sug__input",
@@ -464,6 +466,9 @@ class ZhaopinAdapter(BossAdapter):
         return True
 
     async def greet(self, job, message):
+        custom = self.config.message.mode != "platform"
+        if custom:
+            await self.greetings.verify(job, message)
         if not await self.preflight(job):
             return SendResult("contacted", "智联显示已投递或已沟通，未重复提交")
         button = await self.unique_visible(
@@ -499,10 +504,18 @@ class ZhaopinAdapter(BossAdapter):
                 and state["action"] == "继续沟通"
                 and state["greeting"]
             ):
-                # The platform sends its own greeting with the online resume.
-                # Do not send a second custom/AI message after this receipt.
+                if custom and state["greeting"] != message:
+                    return SendResult(
+                        "partial",
+                        "智联已投递简历，但实际招呼与本岗位原文不一致；请到网站核对，不会补发。实际招呼："
+                        + state["greeting"],
+                    )
                 result = SendResult(
-                    "sent", "智联确认已向该职位发送在线简历和平台招呼", state["greeting"]
+                    "sent",
+                    "智联确认已向该职位发送在线简历，招呼原文核对一致"
+                    if custom
+                    else "智联确认已向该职位发送在线简历和平台招呼",
+                    state["greeting"],
                 )
                 close = self.detail.locator(".deliver-greeting-modal__btn--secondary")
                 if await close.is_visible():
@@ -513,8 +526,15 @@ class ZhaopinAdapter(BossAdapter):
             "unknown", "已点击智联投递，但未取得该职位的明确成功回执；停止且不会自动重投"
         )
 
-    async def verify_delivery(self, job):
+    async def verify_delivery(self, job, expected_message=None):
         state = await self.detail_state(job)
+        if expected_message is not None:
+            # Resume feedback alone cannot prove that a particular greeting was sent.
+            return bool(
+                state["receipt"] == "已向对方发送简历和打招呼语"
+                and state["action"] == "继续沟通"
+                and state["greeting"] == expected_message
+            )
         if state["action"] in {"已投递", "已申请"} or (
             state["receipt"] == "已向对方发送简历和打招呼语" and state["greeting"]
         ):

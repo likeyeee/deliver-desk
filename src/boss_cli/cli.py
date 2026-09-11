@@ -153,7 +153,14 @@ def send_confirmation(cfg: Config, yes: bool):
         markup=False,
     )
     console.print(f"本地匹配：{cfg.match.model_dump(exclude_defaults=True)}", markup=False)
-    if cfg.message.mode == "platform":
+    if cfg.platform == "zhaopin":
+        console.print(
+            "消息：投递智联在线简历并使用网站当前默认招呼。"
+            if cfg.message.mode == "platform"
+            else f"消息：逐岗保存以下自定义招呼并设为默认，核对后投递智联在线简历；结束后恢复原默认招呼：\n{cfg.message.template}",
+            markup=False,
+        )
+    elif cfg.message.mode == "platform":
         console.print(
             "消息：仅点击立即沟通；平台可能不发送文字，单纯建会话不计入已发送。", markup=False
         )

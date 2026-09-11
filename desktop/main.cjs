@@ -139,7 +139,6 @@ else {
             const state = await backend.request("snapshot");
             if (
               state.config.message.mode === "ai" &&
-              state.config.platform !== "zhaopin" &&
               !vault.status().configured
             )
               throw Error("请先在模型与人格中保存 DeepSeek API Key");

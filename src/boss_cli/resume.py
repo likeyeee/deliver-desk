@@ -21,6 +21,7 @@ from .browser import NeedsAttention, clean_error
 from .config import StrictModel
 from .control import Controller, StopRequested, task_lock
 from .storage import now
+from .zhaopin_greetings import validate_greeting
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_TEXT = 60000
@@ -162,12 +163,45 @@ async def controlled_request(awaitable, control):
         await asyncio.gather(task, return_exceptions=True)
 
 
+def validate_greeting_evidence(message, evidence, resume_text, job):
+    def compact(value):
+        return re.sub(r"\s+", "", value)
+
+    source, body = compact(resume_text), compact(message)
+    if not isinstance(evidence, list) or not 1 <= len(evidence) <= 3:
+        raise ValueError("智联招呼缺少可核对的简历依据")
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"anchor", "quote"}:
+            raise ValueError("智联招呼的简历依据格式无效")
+        anchor, quote = item["anchor"], item["quote"]
+        if not isinstance(anchor, str) or not isinstance(quote, str):
+            raise ValueError("智联招呼的简历依据不是文字")
+        anchor, quote = compact(anchor), compact(quote)
+        if not (
+            3 <= len(anchor) <= 80
+            and 12 <= len(quote) <= 600
+            and quote in source
+            and anchor in quote
+            and anchor in body
+        ):
+            raise ValueError("智联招呼引用的依据无法在简历原文和正文中对应，未发起投递")
+    # Reject new English skill names copied from the JD, including Office/Excel.
+    # Job/company names are references to the role, not claims about the applicant.
+    claims = message.replace(job.title, "").replace(job.company, "")
+    for term in re.findall(r"[A-Za-z][A-Za-z0-9+#]*", claims):
+        if len(term) >= 2 and term.casefold() != "hr" and term.casefold() not in source.casefold():
+            raise ValueError(f"智联招呼出现简历原文未提供的词语“{term}”，请调整表达后重新生成")
+    return evidence
+
+
 async def generate_greeting(*, store, bridge, job, config, resume, control, run_id, mode="send"):
     await control.checkpoint()
     if not resume or not resume.profile:
         raise NeedsAttention("请先上传并分析简历，再使用 AI 岗位招呼")
     inputs = {
-        "policy": "automatic-v1",
+        "policy": "automatic-zhaopin-v2-grounded-500"
+        if job.platform == "zhaopin"
+        else "automatic-v1",
         "job": job.as_dict(),
         "resume": resume.revision(),
         "llm": config.llm.model_dump(),
@@ -190,11 +224,17 @@ async def generate_greeting(*, store, bridge, job, config, resume, control, run_
             raise ValueError("未读取到岗位 JD，请确认职位详情可以正常打开")
         cached = store.cached_greeting(job.job_id, input_hash)
         if cached:
+            if job.platform == "zhaopin":
+                validate_greeting(cached["message"])
+                validate_greeting_evidence(
+                    cached["message"], cached["evidence_json"], resume.text, job
+                )
             store.finish_greeting(
                 greeting_id,
                 "generated",
                 message=cached["message"],
                 reused_from=cached["id"],
+                evidence=cached["evidence_json"],
                 note="岗位 JD、简历和表达要求未变，沿用已生成的招呼",
             )
             store.event(run_id, "INFO", "greeting_reused", "已自动沿用招呼并留存记录", job.job_id)
@@ -213,6 +253,9 @@ async def generate_greeting(*, store, bridge, job, config, resume, control, run_
         message = result.get("message")
         if not isinstance(message, str) or not message.strip():
             raise ValueError("模型未返回有效的完整招呼")
+        if job.platform == "zhaopin":
+            message = validate_greeting(message)
+            validate_greeting_evidence(message, result.get("evidence"), resume.text, job)
     except (StopRequested, asyncio.CancelledError):
         store.finish_greeting(greeting_id, "stopped", note="生成已停止，未发起沟通")
         raise
@@ -220,7 +263,13 @@ async def generate_greeting(*, store, bridge, job, config, resume, control, run_
         store.finish_greeting(greeting_id, "failed", note=clean_error(error))
         raise NeedsAttention("AI 岗位招呼生成失败，未发起沟通：" + clean_error(error)) from error
     message = message.strip()
-    store.finish_greeting(greeting_id, "generated", message=message, usage=result.get("usage"))
+    store.finish_greeting(
+        greeting_id,
+        "generated",
+        message=message,
+        usage=result.get("usage"),
+        evidence=result.get("evidence"),
+    )
     store.event(
         run_id,
         "INFO",

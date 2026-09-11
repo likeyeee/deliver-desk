@@ -2,6 +2,7 @@ import React from "react";
 import { Send, Sparkles, FileText, History } from "lucide-react";
 
 export default function GreetingPanel({
+  platform,
   config,
   state,
   locked,
@@ -12,6 +13,7 @@ export default function GreetingPanel({
   onHistory,
 }) {
   const document = state.resume?.document;
+  const isZhaopin = platform === "zhaopin";
   return (
     <section className="panel message-panel">
       <div className="panel-heading">
@@ -30,7 +32,9 @@ export default function GreetingPanel({
           >
             <option value="custom">发送自定义招呼</option>
             <option value="ai">AI 岗位招呼</option>
-            <option value="platform">仅建立平台沟通</option>
+            <option value="platform">
+              {isZhaopin ? "使用网站当前招呼" : "仅建立平台沟通"}
+            </option>
           </select>
         </label>
         {config.mode === "custom" && (
@@ -38,7 +42,7 @@ export default function GreetingPanel({
             <textarea
               className="message-input"
               value={config.template}
-              maxLength={1000}
+              maxLength={isZhaopin ? 500 : 1000}
               onChange={(event) => update("template", event.target.value)}
               aria-label="打招呼模板"
             />
@@ -96,6 +100,12 @@ export default function GreetingPanel({
           </>
         )}
       </fieldset>
+      {isZhaopin && (
+        <p className="ai-hint">
+          投递使用智联账户的在线简历。自定义与 AI 招呼最多 500
+          字；逐岗保存到智联设置并设为默认，重新核对后投递。任务结束恢复原默认招呼。预览只生成内容，不改网站设置。
+        </p>
+      )}
       {config.mode === "ai" ? (
         <>
           <div className="message-preview">
@@ -123,7 +133,9 @@ export default function GreetingPanel({
           <p>
             {config.mode === "custom"
               ? template
-              : "仅建立平台沟通，不发送模板。"}
+              : isZhaopin
+                ? "投递在线简历，并由网站发送当前默认招呼。"
+                : "仅建立平台沟通，不发送模板。"}
           </p>
         </div>
       )}

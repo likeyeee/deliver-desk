@@ -198,6 +198,7 @@ app
     await new Promise((resolve) => setTimeout(resolve, 500));
     await capture("greeting-detail");
     config.platform = "zhaopin";
+    config.message.mode = "ai";
     config.search.filters = {
       薪资待遇: "10K-15K",
       工作经验: "1-3年",
@@ -216,7 +217,7 @@ app
     await window.loadFile(path.join(root, "ui-dist/index.html"));
     await window.webContents.executeJavaScript(`new Promise((resolve,reject)=>{
       const end=Date.now()+10000;const timer=setInterval(()=>{
-        if(document.querySelector('.platform-delivery-info')){clearInterval(timer);resolve();}
+        if(document.querySelector('select[aria-label="沟通方式"]')?.value==='ai'){clearInterval(timer);resolve();}
         else if(Date.now()>end){clearInterval(timer);reject(Error('Zhaopin settings failed to render'));}
       },50);
     })`);

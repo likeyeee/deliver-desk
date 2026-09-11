@@ -253,7 +253,6 @@ class DesktopService:
                 config.platform = pending_job.platform
             if (
                 mode in {"preview", "send"}
-                and config.platform == "boss"
                 and config.message.mode == "ai"
                 and (not self.resume.document or not self.resume.document.profile)
             ):
@@ -269,9 +268,7 @@ class DesktopService:
                     run_id=self.run_id,
                     mode=mode,
                 )
-                if mode in {"preview", "send"}
-                and config.platform == "boss"
-                and config.message.mode == "ai"
+                if mode in {"preview", "send"} and config.message.mode == "ai"
                 else None
             )
             self.task = asyncio.create_task(

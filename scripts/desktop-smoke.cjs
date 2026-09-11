@@ -883,20 +883,70 @@ app
       (await zpSession.cookies.get({ name: "isolation" })).length,
       0,
     );
-    await zpSession.protocol.handle("https", (request) => {
+    const zpFixture = {
+      rows: [
+        {
+          id: "greeting-item-14",
+          text: "您好，请查看我的简历。",
+          category: "常规",
+          selected: true,
+        },
+        {
+          id: "greeting-item-90",
+          text: "用户原有自定义招呼",
+          category: "自定义",
+          selected: false,
+        },
+      ],
+      writes: [],
+      jobs: ["zp001", "zp002"],
+    };
+    await zpSession.protocol.handle("https", async (request) => {
       const route = new URL(request.url).pathname;
+      if (route === "/__fixture_greetings") {
+        const state = zpFixture;
+        if (request.method === "POST") {
+          const data = await request.json();
+          state.writes.push(data);
+          if (data.op === "add")
+            state.rows.push({
+              id: `greeting-item-${100 + state.rows.length}`,
+              text: data.text,
+              category: "自定义",
+              selected: false,
+            });
+          if (data.op === "edit")
+            state.rows.find((r) => r.id === data.id).text = data.text;
+          if (data.op === "default")
+            state.rows.forEach((r) => (r.selected = r.id === data.id));
+        }
+        return new Response(JSON.stringify(state), {
+          headers: {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+          },
+        });
+      }
+      if (route.startsWith("/assets/"))
+        return new Response(
+          '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><rect width="28" height="28"/></svg>',
+          { headers: { "content-type": "image/svg+xml" } },
+        );
       const match = route.match(/\/jobdetail\/(zp00[12])\.htm/);
-      const html = match
-        ? fixtures.ZHAOPIN_DETAIL_HTML.replaceAll("_ID_", match[1])
-            .replaceAll(
-              "_TITLE_",
-              match[1] === "zp001" ? "办公室文员" : "行政文员",
-            )
-            .replaceAll(
-              "_COMPANY_",
-              match[1] === "zp001" ? "示例甲公司" : "示例乙公司",
-            )
-        : fixtures.ZHAOPIN_LIST_HTML;
+      const html =
+        route === "/im/greeting/setting"
+          ? fixtures.ZHAOPIN_SETTINGS_HTML
+          : match
+            ? fixtures.ZHAOPIN_DETAIL_HTML.replaceAll("_ID_", match[1])
+                .replaceAll(
+                  "_TITLE_",
+                  match[1] === "zp001" ? "办公室文员" : "行政文员",
+                )
+                .replaceAll(
+                  "_COMPANY_",
+                  match[1] === "zp001" ? "示例甲公司" : "示例乙公司",
+                )
+            : fixtures.ZHAOPIN_LIST_HTML;
       return new Response(html, {
         headers: { "content-type": "text/html;charset=utf-8" },
       });
@@ -904,6 +954,22 @@ app
     const zpConfig = structuredClone(
       (await backend.request("snapshot")).config,
     );
+    backend.llm.generateGreeting = async (_id, params) => {
+      greetingCalls.push(params);
+      assert.equal(params.job.platform, "zhaopin");
+      assert.deepEqual(params.resume.profile, fixtures.RESUME_PROFILE);
+      return {
+        message: `您好，关注${params.job.title}岗位，我在知识库问答项目中积累了需求分析与效果评估经验，熟悉 Python 和 SQL，希望交流。`,
+        evidence: [
+          {
+            anchor: "知识库问答项目",
+            quote: fixtures.RESUME_TEXT.split("\n")[1],
+          },
+        ],
+      };
+    };
+    const callsBeforeZp = greetingCalls.length;
+    zpConfig.message.mode = "ai";
     zpConfig.platform = "zhaopin";
     zpConfig.search = {
       keywords: ["文员"],
@@ -936,6 +1002,28 @@ app
         JSON.stringify(state.events.slice(-10)),
       );
       assert.equal(state.run.platform, "zhaopin");
+      assert.equal(
+        greetingCalls.length,
+        callsBeforeZp + 2,
+        "Zhaopin generates two distinct greetings and reuses them for delivery",
+      );
+      assert.equal(
+        zpFixture.rows[0].selected,
+        true,
+        "Original website default is restored after every task",
+      );
+      assert.equal(zpFixture.rows.length, mode === "preview" ? 2 : 3);
+      if (mode === "preview") assert.equal(zpFixture.writes.length, 0);
+      else {
+        assert.ok(
+          state.history
+            .filter((r) => r.platform === "zhaopin")
+            .every((r) => r.message.includes(r.title) && r.status === "sent"),
+        );
+        assert.equal(zpFixture.writes.filter((w) => w.op === "add").length, 1);
+        assert.equal(zpFixture.writes.filter((w) => w.op === "edit").length, 1);
+      }
+
       assert.ok(
         state.replyContacts.every((row) => !row.job_id.startsWith("zhaopin:")),
       );

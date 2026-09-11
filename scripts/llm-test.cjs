@@ -154,6 +154,59 @@ test("岗位招呼绑定各岗位详情、完整简历与特点，保留完整�
   }
 });
 
+test("智联逐岗招呼使用相同简历和 JD，并增加网站长度限制", async () => {
+  let body;
+  const llm = new DeepSeek(vault, async (_url, options) => {
+    body = JSON.parse(options.body);
+    return response(
+      completion(
+        JSON.stringify({
+          message: "您好，我有知识库问答项目经验，希望交流岗位。",
+          evidence: [{ anchor: "知识库问答项目", quote: resumeText }],
+        }),
+      ),
+    );
+  });
+  const input = greetingRequest();
+  input.job.platform = "zhaopin";
+  const generated = await llm.generateGreeting("zhaopin", input);
+  assert.equal(
+    generated.message,
+    "您好，我有知识库问答项目经验，希望交流岗位。",
+  );
+  assert.equal(generated.evidence[0].quote, resumeText);
+  assert.deepEqual(body.response_format, { type: "json_object" });
+  assert.ok(
+    body.messages.some(
+      (m) => m.role === "system" && /智联招聘.*500/.test(m.content),
+    ),
+  );
+  const data = JSON.parse(body.messages.at(-1).content);
+  assert.equal(data.job.description, input.job.description);
+  assert.deepEqual(data.resume, input.resume);
+});
+
+for (const [name, content] of [
+  ["非 JSON", "只有正文，没有依据"],
+  ["缺少正文", JSON.stringify({ evidence: [] })],
+  ["缺少依据", JSON.stringify({ message: "您好，期待交流。" })],
+]) {
+  test("智联招呼拒绝" + name + "的模型结果", async () => {
+    let calls = 0;
+    const llm = new DeepSeek(vault, async () => {
+      calls++;
+      return response(completion(content));
+    });
+    const input = greetingRequest();
+    input.job.platform = "zhaopin";
+    await assert.rejects(
+      () => llm.generateGreeting("invalid-grounding", input),
+      /简历依据/,
+    );
+    assert.equal(calls, 1);
+  });
+}
+
 test("岗位招呼缺少简历或岗位时不请求模型，截断内容不成为可发送正文", async () => {
   let calls = 0;
   const llm = new DeepSeek(vault, async () => {

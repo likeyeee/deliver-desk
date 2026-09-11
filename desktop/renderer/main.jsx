@@ -262,10 +262,10 @@ function App() {
   const dirty =
     draft && state && JSON.stringify(draft) !== JSON.stringify(state.config);
   const isZhaopin = draft?.platform === "zhaopin";
-  const greetingBlocked = isZhaopin
-    ? draft?.search.city === "全国"
-    : draft?.message.mode === "ai" &&
-      (!state?.resume?.document?.profile || !state?.llm?.configured);
+  const greetingBlocked =
+    (isZhaopin && draft?.search.city === "全国") ||
+    (draft?.message.mode === "ai" &&
+      (!state?.resume?.document?.profile || !state?.llm?.configured));
   const nav = [
     ["workspace", LayoutDashboard, "任务工作台"],
     ["browser", Monitor, "求职浏览器"],
@@ -421,7 +421,7 @@ function App() {
                     <Empty
                       icon={MessageSquare}
                       title="消息回复支持 BOSS 直聘"
-                      body="智联招聘可在任务工作台自动投递在线简历，平台招呼随简历一起发送。后续聊天请进入智联网页处理。"
+                      body="智联招聘可在任务工作台自动投递在线简历与所选招呼。后续聊天请进入智联网页处理。"
                     />
                   </section>
                 ) : (
@@ -894,40 +894,17 @@ function App() {
                         </details>
                       </fieldset>
                     </section>
-                    {isZhaopin ? (
-                      <section className="panel message-panel">
-                        <div className="panel-heading">
-                          <div>
-                            <FileText size={18} />
-                            <h2>智联简历投递</h2>
-                          </div>
-                        </div>
-                        <div className="platform-delivery-info">
-                          <p>使用你在智联招聘账户中保存的在线简历。</p>
-                          <p>
-                            “立即投递”会发送简历和智联平台招呼。成功后记录结果，再处理下一个符合条件的职位。
-                          </p>
-                          <p>已投递、已沟通及结果待核对的职位会自动跳过。</p>
-                          <Button
-                            icon={Monitor}
-                            onClick={action(() => openBrowser())}
-                          >
-                            查看智联招聘
-                          </Button>
-                        </div>
-                      </section>
-                    ) : (
-                      <GreetingPanel
-                        config={draft.message}
-                        state={state}
-                        locked={locked || state.autoReply?.enabled}
-                        update={(key, value) => update("message", key, value)}
-                        template={template}
-                        onResume={() => setPage("resume")}
-                        onModels={() => setPage("models")}
-                        onHistory={() => setPage("greetings")}
-                      />
-                    )}
+                    <GreetingPanel
+                      platform={draft.platform}
+                      config={draft.message}
+                      state={state}
+                      locked={locked || state.autoReply?.enabled}
+                      update={(key, value) => update("message", key, value)}
+                      template={template}
+                      onResume={() => setPage("resume")}
+                      onModels={() => setPage("models")}
+                      onHistory={() => setPage("greetings")}
+                    />
                   </div>
                   <section className="panel limits">
                     <div className="panel-heading">
@@ -1385,7 +1362,7 @@ function App() {
             <h2 id="confirm-title">确认本次投递范围</h2>
             <p>
               {isZhaopin
-                ? "将向符合以下条件的职位投递智联在线简历和平台招呼。"
+                ? "将向符合以下条件的职位投递智联在线简历与所选招呼。"
                 : "将向符合以下条件的招聘方发起沟通。"}
             </p>
             <dl>
@@ -1406,15 +1383,16 @@ function App() {
               </dd>
               <dt>沟通方式</dt>
               <dd>
-                {isZhaopin
-                  ? "智联在线简历 + 平台招呼"
-                  : draft.message.mode === "custom"
-                    ? "自定义招呼"
-                    : draft.message.mode === "ai"
-                      ? "AI 岗位招呼"
+                {isZhaopin && "智联在线简历 + "}
+                {draft.message.mode === "custom"
+                  ? "自定义招呼"
+                  : draft.message.mode === "ai"
+                    ? "AI 岗位招呼"
+                    : isZhaopin
+                      ? "网站当前招呼"
                       : "仅建立平台沟通"}
               </dd>
-              {!isZhaopin && draft.message.mode === "ai" && (
+              {draft.message.mode === "ai" && (
                 <>
                   <dt>个人简历</dt>
                   <dd>{state.resume?.document?.source_name || "尚未分析"}</dd>
@@ -1422,12 +1400,18 @@ function App() {
               )}
             </dl>
             <div className="confirm-message">
-              {isZhaopin
-                ? "使用智联账户的在线简历，网站发送平台招呼。请先在智联网站确认简历内容。"
-                : draft.message.mode === "custom"
-                  ? template
-                  : draft.message.mode === "ai"
-                    ? "按各岗位详情结合简历生成招呼。简历正文、特点和职位资料将发送至 DeepSeek；生成失败时停止。"
+              {isZhaopin && (
+                <p>
+                  使用智联账户的在线简历。自定义与 AI
+                  模式会逐岗保存并设为默认招呼，核对后投递；任务结束恢复原默认招呼。
+                </p>
+              )}
+              {draft.message.mode === "custom"
+                ? template
+                : draft.message.mode === "ai"
+                  ? "按各岗位详情结合简历生成招呼。简历正文、特点和职位资料将发送至 DeepSeek；生成失败时停止。"
+                  : isZhaopin
+                    ? "网站发送当前默认招呼。"
                     : "仅建立沟通，不发送自定义模板。"}
             </div>
             <div className="modal-actions">

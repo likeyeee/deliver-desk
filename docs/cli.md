@@ -68,7 +68,7 @@ uv run boss diagnose
 
 编辑 `boss.yaml`，然后用 `boss config` 校验。相对 `state_dir` 按配置文件所在目录解析。
 
-`platform` 默认为 `boss`。设为 `zhaopin` 可使用智联适配器：需选择具体城市，例如 `search.city: 杭州`，网页筛选选项使用智联的文字，如 `薪资待遇: 10K-15K`。该平台直接提交网站中保存的在线简历与平台招呼，忽略 `message` 的自定义或 AI 模式；后续回复目前仅支持 BOSS。CLI 的两个平台分别使用 `profile/` 与 `profile-zhaopin/`，下面的消息模式说明适用于 BOSS。
+`platform` 默认为 `boss`。设为 `zhaopin` 可使用智联适配器：需选择具体城市，例如 `search.city: 杭州`，网页筛选选项使用智联的文字，如 `薪资待遇: 10K-15K`。智联使用网站中的在线简历；`message.mode: custom` 会逐岗保存并核对自定义默认招呼后投递，`platform` 使用网站当前招呼。智联自定义招呼最多 500 字，正式任务结束恢复原默认招呼；预览不改网站设置。AI 岗位招呼需在桌面端上传并分析简历后运行。后续回复目前仅支持 BOSS。CLI 的两个平台分别使用 `profile/` 与 `profile-zhaopin/`。
 
 ```yaml
 search:

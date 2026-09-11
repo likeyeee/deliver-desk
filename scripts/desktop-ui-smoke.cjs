@@ -124,6 +124,24 @@ async function run() {
           headers: { "content-type": "text/html;charset=utf-8" },
         });
       });
+    globalThis.zpFixture = {
+      rows: [
+        {
+          id: "greeting-item-14",
+          text: "您好，请查看我的简历。",
+          category: "常规",
+          selected: true,
+        },
+        {
+          id: "greeting-item-90",
+          text: "用户原有自定义招呼",
+          category: "自定义",
+          selected: false,
+        },
+      ],
+      writes: [],
+      jobs: ["zp001", "zp002"],
+    };
     await session
       .fromPartition("persist:zhaopin")
       .protocol.handle("https", async (request) => {
@@ -135,21 +153,59 @@ async function run() {
           await new Promise((resolve) => setTimeout(resolve, 800));
           globalThis.zpNavigationPending = false;
         }
-        const match = route.match(/\/jobdetail\/(zp00[12])\.htm/);
+        if (route === "/__fixture_greetings") {
+          const state = globalThis.zpFixture;
+          if (request.method === "POST") {
+            const data = await request.json();
+            state.writes.push(data);
+            if (data.op === "add")
+              state.rows.push({
+                id: `greeting-item-${100 + state.rows.length}`,
+                text: data.text,
+                category: "自定义",
+                selected: false,
+              });
+            if (data.op === "edit")
+              state.rows.find((r) => r.id === data.id).text = data.text;
+            if (data.op === "default")
+              state.rows.forEach((r) => (r.selected = r.id === data.id));
+          }
+          return new Response(JSON.stringify(state), {
+            headers: {
+              "content-type": "application/json",
+              "access-control-allow-origin": "*",
+            },
+          });
+        }
+        if (route.startsWith("/assets/"))
+          return new Response(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><rect width="28" height="28"/></svg>',
+            { headers: { "content-type": "image/svg+xml" } },
+          );
+        const match = route.match(/\/jobdetail\/([A-Za-z0-9]+)\.htm/);
         const html =
-          route === "/login"
-            ? fixtures.ZHAOPIN_LOGIN_HTML
-            : match
-              ? fixtures.ZHAOPIN_DETAIL_HTML.replaceAll("_ID_", match[1])
-                  .replaceAll(
-                    "_TITLE_",
-                    match[1] === "zp001" ? "办公室文员" : "行政文员",
-                  )
-                  .replaceAll(
-                    "_COMPANY_",
-                    match[1] === "zp001" ? "示例甲公司" : "示例乙公司",
-                  )
-              : fixtures.ZHAOPIN_LIST_HTML;
+          route === "/im/greeting/setting"
+            ? fixtures.ZHAOPIN_SETTINGS_HTML
+            : route === "/login"
+              ? fixtures.ZHAOPIN_LOGIN_HTML
+              : match
+                ? fixtures.ZHAOPIN_DETAIL_HTML.replaceAll("_ID_", match[1])
+                    .replaceAll(
+                      "_TITLE_",
+                      match[1] === globalThis.zpFixture.jobs[0]
+                        ? "办公室文员"
+                        : "行政文员",
+                    )
+                    .replaceAll(
+                      "_COMPANY_",
+                      match[1] === globalThis.zpFixture.jobs[0]
+                        ? "示例甲公司"
+                        : "示例乙公司",
+                    )
+                : fixtures.ZHAOPIN_LIST_HTML.replaceAll(
+                    "zp001",
+                    globalThis.zpFixture.jobs[0],
+                  ).replaceAll("zp002", globalThis.zpFixture.jobs[1]);
         return new Response(html, {
           headers: { "content-type": "text/html;charset=utf-8" },
         });
@@ -463,8 +519,21 @@ async function run() {
               finish_reason: "stop",
               message: {
                 role: "assistant",
-                content:
-                  body.response_format?.type === "json_object"
+                content: body.messages.some((m) =>
+                  m.content.includes("智联招聘单条招呼"),
+                )
+                  ? JSON.stringify({
+                      message: `您好，我关注${JSON.parse(body.messages.at(-1).content).job.title}岗位，曾负责知识库问答项目的需求分析与效果评估，熟悉 Python 和 SQL，希望交流相关能力如何用于岗位工作。`,
+                      evidence: [
+                        {
+                          anchor: "知识库问答项目",
+                          quote: JSON.parse(
+                            body.messages.at(-1).content,
+                          ).resume.text.split("\n")[1],
+                        },
+                      ],
+                    })
+                  : body.response_format?.type === "json_object"
                     ? JSON.stringify(globalThis.resumeTestProfile)
                     : globalThis.greetingTestMode
                       ? `您好，关于${JSON.parse(body.messages.at(-1).content).job.description}。` +
@@ -1004,8 +1073,9 @@ async function run() {
     .selectOption("zhaopin");
   await until(async () => (await snapshot()).browser.platform === "zhaopin");
   await page
-    .getByRole("heading", { name: "智联简历投递", exact: true })
+    .getByRole("heading", { name: "打招呼内容", exact: true })
     .waitFor();
+  await page.getByText(/投递使用智联账户的在线简历/).waitFor();
   assert.equal(
     await page
       .getByRole("button", { name: "开始投递", exact: true })
@@ -1075,6 +1145,18 @@ async function run() {
   await page.getByLabel("工作城市", { exact: true }).selectOption("酒泉");
   await page.getByLabel("职位关键词", { exact: false }).fill("文员");
   await page.getByLabel("薪资待遇", { exact: false }).selectOption("4K-6K");
+  assert.equal(
+    await page
+      .getByRole("button", { name: "开始投递", exact: true })
+      .isDisabled(),
+    true,
+    "AI requires a resume and model on Zhaopin too",
+  );
+  await assert.rejects(
+    page.evaluate(() => window.desk.start({ mode: "preview" })),
+    /DeepSeek/,
+  );
+  await page.getByLabel("沟通方式", { exact: true }).selectOption("platform");
   await page.getByRole("button", { name: "保存修改", exact: true }).click();
   const zpConfig = (await snapshot()).config;
   zpConfig.match.title_any = [];
@@ -1134,7 +1216,7 @@ async function run() {
     await page.getByRole("button", { name: "开始投递", exact: true }).click();
     await page
       .getByRole("dialog")
-      .getByText("智联在线简历 + 平台招呼", { exact: true })
+      .getByText("智联在线简历 + 网站当前招呼", { exact: true })
       .waitFor();
     await page.getByRole("button", { name: "确认开始", exact: true }).click();
     await until(async () => (await snapshot()).active);
@@ -1180,6 +1262,143 @@ async function run() {
   await page.screenshot({
     path: path.join(output, "desktop-zhaopin-workspace-ui.png"),
   });
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "模型与人格", exact: true })
+    .click();
+  await page.getByLabel("API Key", { exact: false }).fill(fakeKey);
+  await page.getByRole("button", { name: "保存密钥", exact: true }).click();
+  await until(async () => (await snapshot()).llm.configured);
+  await desktop.evaluate(
+    ({ dialog }, { file, profile }) => {
+      globalThis.zpFixture.jobs = ["zpai001", "zpai002"];
+      globalThis.resumeTestProfile = profile;
+      const original = dialog.showOpenDialog;
+      dialog.showOpenDialog = async () => {
+        dialog.showOpenDialog = original;
+        return { canceled: false, filePaths: [file] };
+      };
+    },
+    { file: resumeFile, profile: fixtures.RESUME_PROFILE },
+  );
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "个人简历", exact: true })
+    .click();
+  await page.getByRole("button", { name: "上传简历", exact: true }).click();
+  await until(
+    async () =>
+      (await snapshot()).resume.document?.source_name === "示例候选人简历.docx",
+  );
+  await page.getByRole("button", { name: "分析简历", exact: true }).click();
+  await until(async () => {
+    const s = await snapshot();
+    return !s.active && s.resume.document?.profile;
+  });
+  await page
+    .getByRole("button", { name: "使用 AI 岗位招呼", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: "打招呼内容", exact: true })
+    .waitFor();
+  assert.equal(
+    await page.getByLabel("沟通方式", { exact: true }).inputValue(),
+    "ai",
+  );
+  const modelCallsBeforeCustom = (
+    await desktop.evaluate(() => globalThis.llmRequests)
+  ).length;
+  for (const mode of ["preview", "send"]) {
+    await page
+      .getByRole("button", {
+        name: mode === "preview" ? "预览职位" : "开始投递",
+        exact: true,
+      })
+      .click();
+    if (mode === "send") {
+      await page
+        .getByRole("dialog")
+        .getByText("智联在线简历 + AI 岗位招呼", { exact: true })
+        .waitFor();
+      await page.getByRole("button", { name: "确认开始", exact: true }).click();
+    }
+    await until(async () => (await snapshot()).active);
+    state = await until(async () => {
+      const s = await snapshot();
+      return !s.active ? s : false;
+    }, 60000);
+    assert.equal(
+      state.run.status,
+      "completed",
+      JSON.stringify(state.events.slice(-12)),
+    );
+    assert.equal(state.run.sent, mode === "preview" ? 0 : 2);
+    assert.equal(state.run.attempts, mode === "preview" ? 0 : 2);
+    assert.equal(
+      (await desktop.evaluate(() => globalThis.llmRequests)).length,
+      modelCallsBeforeCustom + 2,
+    );
+    const settings = await desktop.evaluate(() => globalThis.zpFixture);
+    assert.equal(settings.rows[0].selected, true);
+    assert.equal(settings.rows[1].text, "用户原有自定义招呼");
+    assert.equal(settings.rows.length, mode === "preview" ? 2 : 3);
+    if (mode === "preview") assert.equal(settings.writes.length, 0);
+    else {
+      assert.equal(settings.writes.filter((w) => w.op === "add").length, 1);
+      assert.equal(settings.writes.filter((w) => w.op === "edit").length, 1);
+      const custom = state.history.filter((r) =>
+        r.job_id.startsWith("zhaopin:zpai"),
+      );
+      assert.equal(custom.length, 2);
+      assert.ok(
+        custom.every(
+          (r) =>
+            r.status === "sent" &&
+            r.message.includes(r.title) &&
+            r.message.length <= 500,
+        ),
+      );
+      assert.equal(new Set(custom.map((r) => r.message)).size, 2);
+    }
+    await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  }
+  await page.screenshot({
+    path: path.join(output, "desktop-zhaopin-ai-workspace-ui.png"),
+  });
+  const provedRecords = await page.evaluate(() => window.desk.greetings());
+  const provedRecord = await page.evaluate(
+    (id) => window.desk.greetings({ id }),
+    provedRecords.items[0].id,
+  );
+  assert.equal(
+    provedRecord.evidence_json[0].quote,
+    fixtures.RESUME_TEXT.split("\n")[1],
+  );
+  assert.ok(provedRecord.reused_from);
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "招呼记录", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "查看记录", exact: true })
+    .first()
+    .click();
+  await page.getByText("招呼中的简历依据", { exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .locator("details")
+    .filter({ hasText: "招呼中的简历依据" })
+    .getByText(provedRecord.evidence_json[0].quote, { exact: true })
+    .waitFor();
+  await page.screenshot({
+    path: path.join(output, "desktop-zhaopin-greeting-proof-ui.png"),
+  });
+  await page.getByRole("button", { name: "关闭招呼记录", exact: true }).click();
+  await page
+    .locator("nav")
+    .getByRole("button", { name: "任务工作台", exact: true })
+    .click();
+
   await page.getByLabel("本次投递平台", { exact: true }).selectOption("boss");
   await until(async () => (await snapshot()).browser.platform === "boss");
   assert.equal(
@@ -1191,7 +1410,7 @@ async function run() {
     "4K-6K",
   );
   console.log(
-    "PASS: Zhaopin QR login, synchronized platform selectors, preserved filters, city requirement, zero-send preview, native resume batch and history, no AI requirement, duplicate prevention",
+    "PASS: Zhaopin QR login, synchronized platform selectors, preserved filters, city requirement, zero-send preview, native resume batch and history, website-default mode without AI, per-job AI generation and settings readback, original-default restoration, duplicate prevention",
   );
   assert.deepEqual(errors, []);
   await fs.writeFile(
@@ -1210,7 +1429,9 @@ async function run() {
         automaticGreetingDiscovery: 2,
         automaticGreetingSends: 2,
         greetingAuditRecords: 4,
-        zhaopinResumeSends: 2,
+        zhaopinResumeSends: 4,
+        zhaopinCustomGreetingSends: 2,
+        zhaopinDefaultRestored: true,
         zhaopinPreviewAttempts: 0,
         isolatedPlatforms: true,
       },

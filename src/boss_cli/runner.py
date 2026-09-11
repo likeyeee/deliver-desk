@@ -18,6 +18,7 @@ from .matching import reject_reason
 from .models import Job, readable_salary
 from .storage import Store, private_dir
 from .zhaopin import ZhaopinAdapter
+from .zhaopin_greetings import validate_greeting
 
 
 class Runner:
@@ -81,9 +82,7 @@ class Runner:
             self.skip(job, reason)
             return
         self.counts["matched"] += 1
-        if self.config.platform == "zhaopin":
-            message = "[智联在线简历投递；网站同时发送平台招呼]"
-        elif self.config.message.mode == "ai":
+        if self.config.message.mode == "ai":
             if not self.greeting:
                 raise NeedsAttention("AI 岗位招呼请在桌面端上传并分析简历后运行")
             message = await self.greeting(job=job, control=self.control)
@@ -95,6 +94,11 @@ class Runner:
                 if self.config.message.mode == "custom"
                 else "[仅发起平台沟通；不发送配置模板]"
             )
+        if self.config.platform == "zhaopin":
+            if self.config.message.mode == "platform":
+                message = "[智联在线简历投递；网站同时发送平台招呼]"
+            else:
+                message = validate_greeting(message)
         self.log(
             "candidate",
             f"{job.company} · {job.title} · {readable_salary(job.salary)}\n  {job.url}\n  {message}",
@@ -104,12 +108,28 @@ class Runner:
         if not self.send:
             self.log("preview", "预览完成，未点击投递或沟通", job)
             return
+        if self.config.platform == "zhaopin" and self.config.message.mode != "platform":
+            self.log("greeting_setting", "正在保存本岗位自定义招呼并重新核对智联默认设置", job)
+            try:
+                await adapter.greetings.prepare(job, message)
+            except (LayoutChanged, PlaywrightError, ValueError) as error:
+                raise NeedsAttention(
+                    "智联招呼设置操作失败，未投递：" + clean_error(error)
+                ) from error
         if not await adapter.preflight(job):
             self.store.mark_contacted(job, self.run_id)
             self.skip(job, "发送前检测到已沟通")
             return
         await self.control.checkpoint()
-        denied = self.store.reserve(job, self.run_id, message, self.config.run.daily_limit)
+        denied = self.store.reserve(
+            job,
+            self.run_id,
+            message,
+            self.config.run.daily_limit,
+            expected_message=message
+            if self.config.platform == "zhaopin" and self.config.message.mode != "platform"
+            else None,
+        )
         if denied:
             self.skip(job, denied)
             return
@@ -270,7 +290,9 @@ async def run_task(
                         await adapter.login(config.browser.login_timeout_seconds)
                         await adapter.inspect_job(job)
                         if config.platform == "zhaopin":
-                            verified = await adapter.verify_delivery(job)
+                            verified = await adapter.verify_delivery(
+                                job, store.expected_delivery_message(job.job_id)
+                            )
                         else:
                             chat = await adapter.open_full_chat(job)
                             verified = await adapter.has_delivery_receipt(chat, job, message)
@@ -291,7 +313,25 @@ async def run_task(
                         )
                         runner.log("login", f"待登录时的页面截图：{directory / 'login.png'}")
                         await adapter.login(config.browser.login_timeout_seconds)
-                        await runner.execute(adapter)
+                        try:
+                            if config.platform == "zhaopin" and mode == "send":
+                                restored = await adapter.greetings.restore()
+                                if restored:
+                                    runner.log("greeting_restore", restored)
+                            await runner.execute(adapter)
+                        finally:
+                            if config.platform == "zhaopin" and mode == "send":
+                                try:
+                                    restored = await adapter.greetings.restore()
+                                    if restored:
+                                        runner.log("greeting_restore", restored)
+                                        if adapter.detail and not adapter.detail.is_closed():
+                                            await adapter.detail.bring_to_front()
+                                except Exception as error:
+                                    raise NeedsAttention(
+                                        "任务已停止，但智联默认招呼未确认恢复，请检查聊天设置："
+                                        + clean_error(error)
+                                    ) from error
                 note = runner.completion_note() if mode in {"send", "preview"} else "任务完成"
                 store.update_run(run_id, status="completed", note=note, **runner.counts)
                 runner.log("complete", note)

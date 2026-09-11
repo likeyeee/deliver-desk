@@ -471,7 +471,7 @@ def test_greeting_recovery_pagination_and_readonly_service(config, store, job):
     assert len(first["items"]) == 50 and len(second["items"]) == 3
     assert second["nextCursor"] is None
     assert len({row["id"] for row in first["items"] + second["items"]}) == 53
-    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_legacy_database_upgrade_keeps_delivery_history_and_adds_greeting_audit(tmp_path, job):
@@ -485,6 +485,8 @@ def test_legacy_database_upgrade_keeps_delivery_history_and_adds_greeting_audit(
         DROP TRIGGER greeting_delivery_insert;
         DROP TRIGGER greeting_delivery_update;
         DROP TABLE greetings;
+        DROP TABLE greeting_settings;
+        DROP TABLE delivery_expectations;
         PRAGMA user_version=4;
     """)
     legacy.close()
@@ -492,19 +494,131 @@ def test_legacy_database_upgrade_keeps_delivery_history_and_adds_greeting_audit(
     assert upgraded.history()[0]["message"] == "原有招呼"
     assert upgraded.blocked(job.job_id) == "sent"
     assert upgraded.greeting_history()["items"] == []
-    assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 7
     upgraded.close()
 
 
+@pytest.mark.parametrize("platform", ["boss", "zhaopin"])
 async def test_greeting_history_remains_readable_during_active_task_and_ai_preview_requires_resume(
     tmp_path,
+    platform,
 ):
     service = DesktopService(tmp_path / "state", tmp_path / "config.yaml")
     try:
         service.config.message.mode = "ai"
+        service.config.platform = platform
         with pytest.raises(ValueError, match="上传并分析简历"):
             await service.request("start", {"mode": "preview"})
         service.task = asyncio.create_task(asyncio.Event().wait())
         assert (await service.request("greetings", {}))["items"] == []
     finally:
         await service.shutdown()
+
+
+@pytest.mark.parametrize(
+    "message,valid",
+    [("您好，我有知识库问答项目经验，期待交流。", True), ("字" * 501, False), ("😀" * 251, False)],
+)
+async def test_zhaopin_generation_enforces_website_limit_and_records_failure(
+    config, store, job, message, valid
+):
+    job.platform = "zhaopin"
+    config.platform = "zhaopin"
+    store.save_job(job)
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+
+    async def request(method, **params):
+        assert params["resume"] == {"text": TEXT, "profile": PROFILE}
+        assert params["job"]["platform"] == "zhaopin"
+        return {
+            "message": message,
+            "evidence": [{"anchor": "知识库问答项目", "quote": TEXT.splitlines()[1]}],
+        }
+
+    kwargs = dict(
+        store=store,
+        bridge=SimpleNamespace(request=request),
+        job=job,
+        config=config,
+        resume=resume,
+        control=Controller(store, "test-run"),
+        run_id="test-run",
+    )
+    if valid:
+        assert await generate_greeting(**kwargs) == message
+    else:
+        with pytest.raises(NeedsAttention, match="500"):
+            await generate_greeting(**kwargs)
+        assert store.greeting_history()["items"][0]["status"] == "failed"
+    assert store.attempts_today() == 0
+
+
+@pytest.mark.parametrize("bad", ["missing", "from_jd", "office"])
+async def test_zhaopin_ungrounded_draft_fails_before_delivery(config, store, job, bad):
+    job.platform = "zhaopin"
+    job.description = "熟练使用 Office 软件处理数据和整理资料。"
+    config.platform = "zhaopin"
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+    message = "您好，我有知识库问答项目经验，期待交流。"
+    evidence = [{"anchor": "知识库问答项目", "quote": TEXT.splitlines()[1]}]
+    if bad == "missing":
+        evidence = []
+    elif bad == "from_jd":
+        message = "我能熟练使用 Office 软件处理数据。"
+        evidence = [{"anchor": "Office", "quote": job.description}]
+    else:
+        message += "我熟练使用 Office 软件。"
+
+    async def request(method, **params):
+        return {"message": message, "evidence": evidence}
+
+    with pytest.raises(NeedsAttention, match="简历"):
+        await generate_greeting(
+            store=store,
+            bridge=SimpleNamespace(request=request),
+            job=job,
+            config=config,
+            resume=resume,
+            control=Controller(store, "test-run"),
+            run_id="test-run",
+        )
+    assert store.greeting_history()["items"][0]["status"] == "failed"
+    assert store.attempts_today() == 0
+
+
+async def test_zhaopin_verified_evidence_survives_cache_and_restart(config, store, job):
+    job.platform = "zhaopin"
+    job.title = "Office 文员"
+    config.platform = "zhaopin"
+    resume = ResumeDocument(
+        source_name="resume.txt", text=TEXT, imported_at=now(), profile=ResumeProfile(**PROFILE)
+    )
+    message = "您好，关注 Office 文员岗位，我有知识库问答项目经验，希望交流。"
+    evidence = [{"anchor": "知识库问答项目", "quote": TEXT.splitlines()[1]}]
+    calls = []
+
+    async def request(method, **params):
+        calls.append(params)
+        return {"message": message, "evidence": evidence}
+
+    kwargs = dict(
+        store=store, bridge=SimpleNamespace(request=request), job=job, config=config, resume=resume
+    )
+    await generate_greeting(**kwargs, control=Controller(store, "test-run"), run_id="test-run")
+    store.create_run("cached-zp", "preview")
+    assert (
+        await generate_greeting(
+            **kwargs, control=Controller(store, "cached-zp"), run_id="cached-zp"
+        )
+        == message
+    )
+    assert len(calls) == 1
+    record = store.greeting_history()["items"][0]
+    assert record["reused_from"]
+    reopened = Store(store.directory)
+    assert reopened.greeting(record["id"])["evidence_json"] == evidence
+    reopened.close()

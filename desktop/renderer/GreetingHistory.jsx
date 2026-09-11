@@ -82,6 +82,17 @@ function GreetingDetail({ record, close }) {
           {record.job_json.description || "未读取到岗位 JD"}
         </p>
       </details>
+      {record.evidence_json?.length > 0 && (
+        <details>
+          <summary>招呼中的简历依据</summary>
+          {record.evidence_json.map((item, index) => (
+            <div key={index}>
+              <h4>{item.anchor}</h4>
+              <p className="greeting-text">{item.quote}</p>
+            </div>
+          ))}
+        </details>
+      )}
       <details>
         <summary>当时的简历特点</summary>
         <p>{record.profile_json.summary}</p>

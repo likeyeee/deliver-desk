@@ -90,6 +90,12 @@ class Store:
           UNIQUE(run_id, job_id)
         );
         CREATE INDEX IF NOT EXISTS greetings_input ON greetings(job_id, input_hash);
+        CREATE TABLE IF NOT EXISTS greeting_settings (
+          platform TEXT PRIMARY KEY, data TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS delivery_expectations (
+          job_id TEXT PRIMARY KEY REFERENCES jobs(job_id), message TEXT NOT NULL
+        );
         CREATE TRIGGER IF NOT EXISTS greeting_delivery_insert AFTER INSERT ON deliveries BEGIN
           UPDATE greetings SET delivery_status=NEW.status, delivery_note=NEW.note,
             updated_at=NEW.updated_at
@@ -114,7 +120,30 @@ class Store:
         ):
             if name not in reply_columns:
                 self.db.execute(f"ALTER TABLE replies ADD COLUMN {name} {definition}")
-        self.db.execute("PRAGMA user_version=6")
+        greeting_columns = {row[1] for row in self.db.execute("PRAGMA table_info(greetings)")}
+        if "evidence_json" not in greeting_columns:
+            self.db.execute(
+                "ALTER TABLE greetings ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        self.db.execute("PRAGMA user_version=7")
+
+    def greeting_settings(self, platform):
+        row = self.db.execute(
+            "SELECT data FROM greeting_settings WHERE platform=?", (platform,)
+        ).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_greeting_settings(self, platform, data):
+        self.db.execute(
+            "INSERT INTO greeting_settings VALUES(?,?) ON CONFLICT(platform) DO UPDATE SET data=excluded.data",
+            (platform, json.dumps(data, ensure_ascii=False)),
+        )
+
+    def expected_delivery_message(self, job_id):
+        row = self.db.execute(
+            "SELECT message FROM delivery_expectations WHERE job_id=?", (job_id,)
+        ).fetchone()
+        return row[0] if row else None
 
     def close(self):
         self.db.close()
@@ -231,19 +260,19 @@ class Store:
 
     def cached_greeting(self, job_id, input_hash):
         row = self.db.execute(
-            """SELECT id,message FROM greetings WHERE job_id=? AND input_hash=?
+            """SELECT id,message,evidence_json FROM greetings WHERE job_id=? AND input_hash=?
             AND status='generated' AND message<>'' ORDER BY rowid DESC LIMIT 1""",
             (job_id, input_hash),
         ).fetchone()
-        return dict(row) if row else None
+        return dict(row) | {"evidence_json": json.loads(row["evidence_json"])} if row else None
 
     def finish_greeting(
-        self, greeting_id, status, *, message="", usage=None, note="", reused_from=""
+        self, greeting_id, status, *, message="", usage=None, note="", reused_from="", evidence=None
     ):
         if status not in {"generated", "failed", "stopped"}:
             raise ValueError("无效的招呼生成状态")
         self.db.execute(
-            """UPDATE greetings SET status=?,message=?,usage=?,note=?,reused_from=?,updated_at=?
+            """UPDATE greetings SET status=?,message=?,usage=?,note=?,reused_from=?,updated_at=?,evidence_json=?
             WHERE id=? AND status='generating'""",
             (
                 status,
@@ -252,6 +281,7 @@ class Store:
                 note,
                 reused_from,
                 now(),
+                json.dumps(evidence or [], ensure_ascii=False),
                 greeting_id,
             ),
         )
@@ -275,7 +305,7 @@ class Store:
         if not row:
             raise ValueError("招呼记录不存在")
         result = dict(row)
-        for field in ("job_json", "profile_json", "usage"):
+        for field in ("job_json", "profile_json", "usage", "evidence_json"):
             result[field] = json.loads(result[field])
         return result
 
@@ -514,7 +544,9 @@ class Store:
             (day(),),
         ).fetchone()[0]
 
-    def reserve(self, job: Job, run_id: str, message: str, limit: int) -> str | None:
+    def reserve(
+        self, job: Job, run_id: str, message: str, limit: int, *, expected_message=None
+    ) -> str | None:
         """Atomic dedup + daily quota + write-ahead record before the first external click."""
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -536,6 +568,11 @@ class Store:
                 "INSERT INTO events(time,run_id,level,kind,job_id,message) VALUES(?,?,?,?,?,?)",
                 (now(), run_id, "INFO", "send_reserved", job.job_id, "预占发送名额"),
             )
+            self.db.execute("DELETE FROM delivery_expectations WHERE job_id=?", (job.job_id,))
+            if expected_message is not None:
+                self.db.execute(
+                    "INSERT INTO delivery_expectations VALUES(?,?)", (job.job_id, expected_message)
+                )
             self.db.execute("COMMIT")
             return None
         except BaseException:
